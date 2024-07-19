@@ -30,8 +30,10 @@ def main(args):
     model = TrafficDiffuser_models[args.model](
         max_num_agents=args.max_agents,
         seq_length=args.seq_length,
+        hist_length=args.hist_length,
         dim_size=args.dim_size,
         use_map=args.use_map,
+        use_history=args.use_history,
     ).to(device)
     
     # Load a TrafficDiffuser checkpoint:
@@ -46,14 +48,12 @@ def main(args):
     # Create sampling noise:
     z = torch.randn(args.num_sampling, args.max_agents, args.seq_length, args.dim_size, device=device)
 
-    # Load scenario and corresponding map:
-    #hist_npy = np.load(args.hist_path)
+    # Load scenario history and corresponding map:
+    data_npy = np.load(args.data_path)
     map_rgb = Image.open(args.map_path).convert('RGB')
-    
-    #hist = torch.tensor(hist_npy, dtype=torch.float32).to(device)
+    hist = torch.tensor(data_npy[:, :args.hist_length, :], dtype=torch.float32).to(device)
     mp = map_rgb.ToTensor().to(device)
-    
-    model_kwargs = dict(hist=None, mp=mp, mask=None)
+    model_kwargs = dict(hist=hist, mp=mp, mask=None)
 
     # Sample trajectories:
     samples = diffusion.p_sample_loop(
@@ -66,7 +66,7 @@ def main(args):
     samples_dir = os.path.dirname(samples_path)
     if not os.path.exists(samples_dir):
         os.makedirs(samples_dir)
-    np.save(samples.cpu().numpy(), samples_path, nrow=4, normalize=True, value_range=(-1, 1))
+    np.save(samples.cpu().numpy(), samples_path)
 
 
 # To sample from the EMA weights of a custom TrafficDiffuser-L model, run:
@@ -75,12 +75,14 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-L")
-    parser.add_argument("--hist-path", type=str, default="/data/tii/data/nuscenes_trainval_hist_npy/sd_nuscenes_v1.0-trainval_scene-0001.npy")
+    parser.add_argument("--data-path", type=str, default="/data/tii/data/nuscenes_trainval_npy/sd_nuscenes_v1.0-trainval_scene-0001.npy")
     parser.add_argument("--map-path", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_maps_png1/sd_nuscenes_v1.0-trainval_scene-0001.png")
     parser.add_argument("--max-agents", type=int, default=234)
-    parser.add_argument("--seq-length", type=int, default=156)
+    parser.add_argument("--seq-length", type=int, default=56)
+    parser.add_argument("--hist-length", type=int, default=100)
     parser.add_argument("--dim-size", type=int, default=8)
-    parser.add_argument("--use-map", type=bool, default=False)
+    parser.add_argument("--use-map", type=bool, default=True)
+    parser.add_argument("--use-history", type=bool, default=True)
     parser.add_argument("--num-sampling", type=int, default=4)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--seed", type=int, default=0)

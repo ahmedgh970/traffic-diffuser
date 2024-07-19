@@ -94,29 +94,29 @@ class CustomDataset(Dataset):
     
     
 # Adapt the max_agents from dataset to other
-def collate_fn(batch, max_agents=234):
+def collate_fn(batch, max_agents=234, hist_length=100):
     padded_batch = []
-    masks = []
     map_images = []
-
-    for x, map_image in batch:
-        pad_n = max_agents - x.size(0)
+    masks = []
+    
+    for data, map_image in batch:
+        pad_n = max_agents - data.size(0)
         pad_size = (0, 0, 0, 0, 0, pad_n)  # padding only the first dimension
-        padded_x = nn.functional.pad(x, pad_size, "constant", 0.0)
-        padded_batch.append(padded_x)
+        padded_data = nn.functional.pad(data, pad_size, "constant", 0.0)
+        padded_batch.append(padded_data)
 
         # Create a mask for valid agents
-        mask = torch.ones((x.size(0), x.size(1), x.size(2)), dtype=torch.float32)
+        mask = torch.ones((data.size(0), data.size(1), data.size(2)), dtype=torch.float32)
         mask = nn.functional.pad(mask, pad_size, "constant", 0.0)
         masks.append(mask)
 
         map_images.append(map_image)
     
-    padded_batch = torch.stack(padded_batch)
+    padded_x, padded_hist = torch.stack(padded_batch)[:, :, hist_length:, :], torch.stack(padded_batch)[:, :, :hist_length, :]
     masks = torch.stack(masks)
     map_images = torch.stack(map_images)
 
-    return padded_batch, masks, map_images 
+    return padded_x, padded_hist, map_images, masks
     
     
     
@@ -147,8 +147,10 @@ def main(args):
     model = TrafficDiffuser_models[args.model](
         max_num_agents=args.max_agents,
         seq_length=args.seq_length,
+        hist_length=args.hist_length,
         dim_size=args.dim_size,
-        use_map=args.use_map
+        use_map=args.use_map,
+        use_history=args.use_history,
     )
     
     # Note that parameter initialization is done within the model constructor
@@ -196,12 +198,13 @@ def main(args):
     for epoch in range(args.epochs):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
-        for x, mask, mp in loader:
+        for x, hist, mp, mask in loader:
             x = x.to(device)
-            mask = mask.to(device)
+            hist = hist.to(device)
             mp = mp.to(device)
+            mask = mask.to(device)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(mp=mp, mask=mask)
+            model_kwargs = dict(hist=hist, mp=mp, mask=mask)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
@@ -257,10 +260,12 @@ if __name__ == "__main__":
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-S")
     parser.add_argument("--max-agents", type=int, default=234)
-    parser.add_argument("--seq-length", type=int, default=156)
+    parser.add_argument("--seq-length", type=int, default=56)
+    parser.add_argument("--hist-length", type=int, default=100)
     parser.add_argument("--dim-size", type=int, default=8)
-    parser.add_argument("--use-map", type=bool, default=False)
-    parser.add_argument("--epochs", type=int, default=1000)
+    parser.add_argument("--use-map", type=bool, default=True)
+    parser.add_argument("--use-history", type=bool, default=False)
+    parser.add_argument("--epochs", type=int, default=500)
     parser.add_argument("--global-batch-size", type=int, default=64)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)

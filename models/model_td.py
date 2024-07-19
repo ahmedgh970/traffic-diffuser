@@ -83,6 +83,15 @@ class MapEmbedder(nn.Module):
         x = self.fc2(x)
         return x
 
+class HistoryEmbedder(nn.Module):
+    """
+    History encoding as context to condition the TrafficDiffuser.
+    """
+    def __init__(self, hist_length, dim_size, hidden_size, num_heads, depth, mlp_ratio, use_ckpt_wrapper):
+        super().__init__()
+    
+    def forward(self, x):
+        return x
 
 
 #################################################################################
@@ -155,8 +164,10 @@ class TrafficDiffuser(nn.Module):
         self,
         max_num_agents,
         seq_length,
+        hist_length,
         dim_size,
         use_map,
+        use_history,
         hidden_size,
         num_heads,
         depth,
@@ -165,16 +176,22 @@ class TrafficDiffuser(nn.Module):
         use_ckpt_wrapper=True,
     ):
         super().__init__()
-        #self.l_hist = hist_length
-        #self.h_embedder = HistoryEmbedder(hidden_size, num_heads, mlp_ratio=mlp_ratio)
         self.t_embedder = TimestepEmbedder(hidden_size)
         if use_map:
             self.m_embedder = MapEmbedder(input_size=map_size, output_dim=hidden_size)
-        
+        if use_history:
+            self.h_embedder = HistoryEmbedder(
+                hist_length=hist_length,
+                dim_size=dim_size,
+                hidden_size=hidden_size,
+                num_heads=num_heads,
+                depth=depth,
+                mlp_ratio=mlp_ratio,
+                use_ckpt_wrapper=use_ckpt_wrapper
+            )
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         self.proj2 = nn.Linear(seq_length*hidden_size, hidden_size, bias=True)     
-        #self.proj2 = nn.Linear((seq_length-hist_length)*hidden_size, hidden_size, bias=True)
-        #self.t_pos_embed = nn.Parameter(torch.zeros(1, (seq_length-hist_length), hidden_size), requires_grad=False)
+        #self.t_pos_embed = nn.Parameter(torch.zeros(1, seq_length, hidden_size), requires_grad=False)
         self.t_blocks = nn.ModuleList([
             MaskedTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
@@ -183,9 +200,10 @@ class TrafficDiffuser(nn.Module):
             MaskedTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, seq_length, dim_size) 
-        #self.final_layer = FinalLayer(hidden_size, (seq_length-hist_length), dim_size)
+        #self.final_layer = FinalLayer(hidden_size, seq_length, dim_size)
         
         self.use_map = use_map
+        self.use_history = use_history
         self.use_ckpt_wrapper = use_ckpt_wrapper
         self.initialize_weights()
 
@@ -247,8 +265,9 @@ class TrafficDiffuser(nn.Module):
         # (B, H, W, C) or (B, F, 2)
         if self.use_map:
             c += self.m_embedder(mp)          # (B, H)
-        if hist is not None:
-            c += self.h_embedder(hist)        # (B, H)
+        if self.use_history:
+            #c += self.h_embedder(hist)        # (B, H)
+            raise ValueError("Not implemented.")
         #############################################################
         
         ################# Temporal Attention ########################
