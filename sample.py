@@ -31,6 +31,7 @@ def main(args):
         max_num_agents=args.max_agents,
         seq_length=args.seq_length,
         dim_size=args.dim_size,
+        use_map=args.use_map,
     ).to(device)
     
     # Load a TrafficDiffuser checkpoint:
@@ -79,6 +80,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-agents", type=int, default=234)
     parser.add_argument("--seq-length", type=int, default=156)
     parser.add_argument("--dim-size", type=int, default=8)
+    parser.add_argument("--use-map", type=bool, default=False)
     parser.add_argument("--num-sampling", type=int, default=4)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--seed", type=int, default=0)

@@ -148,6 +148,7 @@ def main(args):
         max_num_agents=args.max_agents,
         seq_length=args.seq_length,
         dim_size=args.dim_size,
+        use_map=args.use_map
     )
     
     # Note that parameter initialization is done within the model constructor
@@ -258,6 +259,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-agents", type=int, default=234)
     parser.add_argument("--seq-length", type=int, default=156)
     parser.add_argument("--dim-size", type=int, default=8)
+    parser.add_argument("--use-map", type=bool, default=False)
     parser.add_argument("--epochs", type=int, default=1000)
     parser.add_argument("--global-batch-size", type=int, default=64)
     parser.add_argument("--global-seed", type=int, default=0)

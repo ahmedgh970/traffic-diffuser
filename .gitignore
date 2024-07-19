@@ -2,9 +2,9 @@
 __pycache__/
 *.pyc
 
-# Ignore screen log and todo files
+# Ignore screen log.txt and main.y files
 log.txt
-todo.txt
+main.py
 
 # Ignore results and other directories
 results/*

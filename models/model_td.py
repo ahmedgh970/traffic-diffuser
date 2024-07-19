@@ -7,7 +7,7 @@ import torchinfo
 from mamba_ssm.modules.mamba_simple import Mamba
 from mamba_ssm.ops.triton.layernorm import RMSNorm
 
-from layers import Attention, Mlp, Gmlp, modulate, get_2d_sincos_pos_embed
+from models.layers import Attention, Mlp, Gmlp, modulate, get_2d_sincos_pos_embed
 
 
 
@@ -156,6 +156,7 @@ class TrafficDiffuser(nn.Module):
         max_num_agents,
         seq_length,
         dim_size,
+        use_map,
         hidden_size,
         num_heads,
         depth,
@@ -167,7 +168,8 @@ class TrafficDiffuser(nn.Module):
         #self.l_hist = hist_length
         #self.h_embedder = HistoryEmbedder(hidden_size, num_heads, mlp_ratio=mlp_ratio)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.m_embedder = MapEmbedder(input_size=map_size, output_dim=hidden_size)
+        if use_map:
+            self.m_embedder = MapEmbedder(input_size=map_size, output_dim=hidden_size)
         
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         self.proj2 = nn.Linear(seq_length*hidden_size, hidden_size, bias=True)     
@@ -183,6 +185,7 @@ class TrafficDiffuser(nn.Module):
         self.final_layer = FinalLayer(hidden_size, seq_length, dim_size) 
         #self.final_layer = FinalLayer(hidden_size, (seq_length-hist_length), dim_size)
         
+        self.use_map = use_map
         self.use_ckpt_wrapper = use_ckpt_wrapper
         self.initialize_weights()
 
@@ -233,22 +236,20 @@ class TrafficDiffuser(nn.Module):
         - x: (B, N, L, D) tensor of agents where N:max_num_agents, L:sequence_length, and D:sequence_dim
               sequence_dim is the shape of [valid, x, y, h, Vx, Vy, W, L]
         - mask: (B, N, L, D) tensor of the mask used to pad to the max agents because of the variable num_agent through different scenarios.
+        - hist: (B, N, L0, D) tensor of agents where N:max_num_agents, L0:hist_sequence_length, and D:sequence_dim
         - mp: (B, C, H, W) tensor of the map per scenario either png of npy file format
         - t: (N,) tensor of diffusion timesteps     
         """
-        #hist = x[:, :, :self.l_hist, :]     # history information to embed as cond 
-        #x = x[:, :, self.l_hist:, :]        # future information
         
         ###################### Embedders ############################
         # (B, t_max=1000)
         c = self.t_embedder(t)                # (B, H) ts for diff process
         # (B, H, W, C) or (B, F, 2)
-        if mp is not None:
+        if self.use_map:
             c += self.m_embedder(mp)          # (B, H)
         if hist is not None:
             c += self.h_embedder(hist)        # (B, H)
         #############################################################
-        
         
         ################# Temporal Attention ########################
         # x is of shape (B, N, L, D) but should be (B*N, L, H)
@@ -282,7 +283,6 @@ class TrafficDiffuser(nn.Module):
         x = self.proj2(x)                   # (B, N, H)   
         #############################################################
         
-        
         ################### Agent Attention #########################
         # x is of shape (B, N, H)
         # c is of shape (B, H)
@@ -300,7 +300,6 @@ class TrafficDiffuser(nn.Module):
             for block in self.a_blocks:
                 x = block(x, msk, c)        # (B, N, H)
         #############################################################
-        
         
         ##################### Final layer ###########################
         # x is of shape (B, N, H)
