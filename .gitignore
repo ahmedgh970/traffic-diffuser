@@ -5,12 +5,12 @@ __pycache__/
 # Ignore environment variables file
 .env
 
-# Ignore log files
-log.txt
+# Ignore text files
+*.txt
 
 # Ignore OS-specific files
 .DS_Store
 Thumbs.db
 
 # Ignore results directory
-/results/
+results/
