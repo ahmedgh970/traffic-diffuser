@@ -12,5 +12,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Ignore results directory
+# Ignore results and other directory
 results/
+other/
