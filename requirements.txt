@@ -1,0 +1,15 @@
+# 1) create conda venv with python 3.10 (for vision mamba support)
+# 2) pip install torch==2.1.1 torchvision==0.16.1 torchaudio==2.1.1 --index-url https://download.pytorch.org/whl/cu118 (2.1.1 for vision mamba support)
+
+# 3) pip install -r requirements
+numpy
+tqdm
+scikit-learn
+Pillow
+einops
+timm
+diffusers
+accelerate
+torchinfo
+
+# 4) to install vision mamba, go under mamba dir and pip install -e .
