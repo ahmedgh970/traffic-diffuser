@@ -13,4 +13,4 @@ log.txt
 Thumbs.db
 
 # Ignore results directory
-results/
+/results/
