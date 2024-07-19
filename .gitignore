@@ -2,16 +2,10 @@
 __pycache__/
 *.pyc
 
-# Ignore environment variables file
-.env
+# Ignore screen log and todo files
+log.txt
+todo.txt
 
-# Ignore text files
-*.txt
-
-# Ignore OS-specific files
-.DS_Store
-Thumbs.db
-
-# Ignore results and other directory
-results/
-other/
+# Ignore results and other directories
+results/*
+other/*
