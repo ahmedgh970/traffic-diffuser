@@ -71,7 +71,7 @@ class MapEmbedder(nn.Module):
         self.fc1 = nn.Linear(256 * self.h * self.w, 512) 
         self.fc2 = nn.Linear(512, output_dim)
 
-    def forward(self, x):
+    def forward(self, x=None):
         # (B, C, H, W) Shape of the map from the dataloader after transform
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
@@ -111,10 +111,12 @@ class MaskedTransformer(nn.Module):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         # Masked attention
         x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), mask)  # (B, N, H)
-        x = x * mask                                                                                    # (B, N, H)
+        if mask is not None:
+            x = x * mask                                                                                # (B, N, H)
         # Mlp/Gmlp
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))         # (B, N, H)
-        x = x * mask                                                                                    # (B, N, H)
+        if mask is not None:
+            x = x * mask                                                                                # (B, N, H)
         return x
 
 
@@ -140,7 +142,8 @@ class FinalLayer(nn.Module):
         x = modulate(self.norm_final(x), shift, scale)                      # (B, N, H)
         x = self.linear(x)                                                  # (B, N, L*D)
         x = x.view(x.shape[0], x.shape[1], self.seq_length, self.dim_size)  # (B, N, L, D)
-        x = x * mask                                                        # (B, N, L, D)
+        if mask is not None:
+            x = x * mask                                                    # (B, N, L, D)
         return x
     
     
@@ -224,7 +227,7 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, mask, mp):
+    def forward(self, x, t, hist=None, mp=None, mask=None):
         """
         Forward pass of TrafficDiffuser.
         - x: (B, N, L, D) tensor of agents where N:max_num_agents, L:sequence_length, and D:sequence_dim
@@ -238,13 +241,12 @@ class TrafficDiffuser(nn.Module):
         
         ###################### Embedders ############################
         # (B, t_max=1000)
-        t = self.t_embedder(t)                # (B, H) ts for diff process
+        c = self.t_embedder(t)                # (B, H) ts for diff process
         # (B, H, W, C) or (B, F, 2)
-        mp = self.m_embedder(mp)             # (B, H)
-        #h = self.h_embedder(hist)            # (B, H)
-        #c = t + mp + h                       # (B, H)
-        c = t + mp                           # (B, H)
-        #c = t                                # (B, H)
+        if mp is not None:
+            c += self.m_embedder(mp)          # (B, H)
+        if hist is not None:
+            c += self.h_embedder(hist)        # (B, H)
         #############################################################
         
         
@@ -255,10 +257,12 @@ class TrafficDiffuser(nn.Module):
         x = x.reshape(B*N, L, H)                                            # (B*N, L, H)
 
         # mask is of shape (B, N, L, D) but should be (B*N, L, H)
-        msk = mask[:, :, :, 0]                                              # (B, N, L)        
-        msk = msk.reshape(B*N, L)                                           # (B*N, L)
-        msk = msk.unsqueeze(2)                                              # (B*N, L, 1)
-        msk = msk.expand(B*N, L, H).contiguous()                            # (B*N, L, H)
+        msk = None
+        if mask is not None:
+            msk = mask[:, :, :, 0]                                          # (B, N, L)        
+            msk = msk.reshape(B*N, L)                                       # (B*N, L)
+            msk = msk.unsqueeze(2)                                          # (B*N, L, 1)
+            msk = msk.expand(B*N, L, H).contiguous()                        # (B*N, L, H)
         
         # c is of shape (B, H) but should be (B*N, H)
         ct = c.unsqueeze(1)                                                 # (B, 1, H)
@@ -283,10 +287,11 @@ class TrafficDiffuser(nn.Module):
         # x is of shape (B, N, H)
         # c is of shape (B, H)
         # mask is of shape (B, N, L, D) but should be (B, N, H)
-        msk = mask[:, :, 0, 0]                                                               # (B, N)        
-        msk = msk.unsqueeze(2)                                                               # (B, N, 1)
-        msk = msk.expand(B, N, H).contiguous()                                               # (B, N, H)
-        
+        if mask is not None:
+            msk = mask[:, :, 0, 0]                                                               # (B, N)        
+            msk = msk.unsqueeze(2)                                                               # (B, N, 1)
+            msk = msk.expand(B, N, H).contiguous()                                               # (B, N, H)
+            
         #x += self.a_pos_embed
         if self.use_ckpt_wrapper:
             for block in self.a_blocks:
@@ -302,29 +307,8 @@ class TrafficDiffuser(nn.Module):
         x = self.final_layer(x, mask, c)    # (B, N, L, D)
         #############################################################
         
-        #x = torch.concat(hist, x, axis=2)
         return x
 
-'''
-    def forward_with_cfg(self, x, mask, mp, t, cfg_scale):
-        """
-        Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
-        """
-        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
-        half = x[: len(x) // 2]
-        combined = torch.cat([half, half], dim=0)
-        model_out = self.forward(combined, t, y)
-        # For exact reproducibility reasons, we apply classifier-free guidance on only
-        # three channels by default. The standard approach to cfg applies it to all channels.
-        # This can be done by uncommenting the following line and commenting-out the line following that.
-        # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
-        eps, rest = model_out[:, :3], model_out[:, 3:]
-        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
-        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-        eps = torch.cat([half_eps, half_eps], dim=0)
-        return torch.cat([eps, rest], dim=1)
-''' 
-    
 
 #################################################################################
 #                          TrafficDiffuser Configs                              #

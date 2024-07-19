@@ -1,8 +1,7 @@
 ## The official PyTorch implementation of TrafficDiffuser <br><sub>Denoising Diffusion Model for Traffic Simulation</sub>
+This project features a traffic simulation model for conditional trajectory generation using diffusion models.
 
 ![TrafficDiffuser overall architecture](docs/asset/TrafficDiffuser.png)
-
-This repo features a traffic simulation model for conditional trajectory generation using diffusion models.
 
 The repository is organised as follows:
   * [Documentation](#documentation)
@@ -24,7 +23,9 @@ TrafficDiffuser-main
 ├── diffusion/                    # Diffusion dir
 ├── docs/asset                    # Documentation figures               
 ├── mamba/                        # Mamba model dir
-├── model.py                      # TrafficDiffuser backbone                
+├── models/                       # Backbones dir
+│   └── layers.py                 # Layers and utility functions
+│   └── model_td.py               # TrafficDiffuser backbone               
 ├── requirements.txt              # Requirements
 ├── sample.py                     # Sampling script 
 └── train.py                      # Training script
@@ -50,8 +51,7 @@ pip install -e .
 ```
 
 ## Data Processing
-We build our trainval datasets using the converted ScenarioNet's unified format. Then, we preprocess using [`process_dataset.ipynb`](process_dataset.ipynb) to produce the numpy data and png map (per scenario) directories. 
-You will need to install [ScenarioNet](https://github.com/metadriverse/scenarionet).
+First, we convert and merge the original datasets (nuscenes, waymo, etc.) into pickle files with a unified dictionary format, using ScenarioNet. Then, we used our preprocessing script to produce the data and map directories in the desired format. Specifically, we preprocess using [`process_dataset.ipynb`](process_dataset.ipynb) to produce the numpy data and PNG map (per scenario) directories. You will need to install [ScenarioNet](https://github.com/metadriverse/scenarionet).
 
 ## Training
 We provide a training script for TrafficDiffuser model in [`train.py`](train.py).

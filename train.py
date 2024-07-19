@@ -20,7 +20,7 @@ from collections import OrderedDict
 from accelerate import Accelerator
 from PIL import Image
 
-from model import TrafficDiffuser_models
+from models.model_td import TrafficDiffuser_models
 from diffusion import create_diffusion
 
 
@@ -199,11 +199,8 @@ def main(args):
             x = x.to(device)
             mask = mask.to(device)
             mp = mp.to(device)
-            x = x.squeeze(dim=1)
-            mask = mask.squeeze(dim=1)
-            mp = mp.squeeze(dim=1)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(mask=mask, mp=mp)
+            model_kwargs = dict(mp=mp, mask=mask)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
