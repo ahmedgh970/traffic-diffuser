@@ -58,7 +58,7 @@ We provide a training script for TrafficDiffuser model in [`train.py`](train.py)
 To launch TrafficDiffuser-L training with `N` GPUs on one node:
 
 ```bash
-accelerate launch --multi_gpu --num_processes N train.py --model TrafficDiffuser-L --data-path /path/to/preprocessed/scenarios/ --map-path /path/to/png/maps/
+accelerate launch --multi_gpu --num_processes N train.py --model TrafficDiffuser-L --data-path /path/to/preprocessed/scenarios/ --use-history --use-map --map-path /path/to/png/maps/
 ```
 
 ## Sampling

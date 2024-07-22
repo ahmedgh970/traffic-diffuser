@@ -115,6 +115,34 @@ class Mlp(nn.Module):
         return x
     
     
+
+class MaskedTransformer(nn.Module):
+    """
+    A Masked Transformer block
+    """
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
+        super().__init__()
+        self.num_heads = num_heads
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.attn = Attention(dim=hidden_size, num_heads=num_heads)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+
+    def forward(self, x, mask):
+        # [(B, N, H), (B, N, H)]
+        # Masked attention
+        x = x + self.attn(self.norm1(x), mask)  # (B, N, H)
+        if mask is not None:
+            x = x * mask                        # (B, N, H)
+        # Mlp/Gmlp
+        x = x + self.mlp(self.norm2(x))         # (B, N, H)
+        if mask is not None:
+            x = x * mask                        # (B, N, H)
+        return x
+    
+    
 class Gmlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()

@@ -6,7 +6,6 @@ from glob import glob
 from time import time
 
 import torch
-import torch
 import torch.nn as nn
 import torch.optim as optim
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
@@ -75,7 +74,7 @@ class CustomDataset(Dataset):
         self.transform = transforms.Compose([
             #transforms.Resize((256, 256)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Using ImageNet statistics
+            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Using ImageNet statistics
         ])
 
     def __len__(self):
@@ -95,28 +94,34 @@ class CustomDataset(Dataset):
     
 # Adapt the max_agents from dataset to other
 def collate_fn(batch, max_agents=234, hist_length=100):
-    padded_batch = []
+    padded_x = []
+    padded_h = []
     map_images = []
-    masks = []
+    mask_x = []
+    mask_h = []
     
     for data, map_image in batch:
+        map_images.append(map_image)
+        
         pad_n = max_agents - data.size(0)
         pad_size = (0, 0, 0, 0, 0, pad_n)  # padding only the first dimension
         padded_data = nn.functional.pad(data, pad_size, "constant", 0.0)
-        padded_batch.append(padded_data)
+        x, h = padded_data[:, hist_length:, :], padded_data[:, :hist_length, :]
+        padded_x.append(x)
+        padded_h.append(h)
 
         # Create a mask for valid agents
         mask = torch.ones((data.size(0), data.size(1), data.size(2)), dtype=torch.float32)
         mask = nn.functional.pad(mask, pad_size, "constant", 0.0)
-        masks.append(mask)
-
-        map_images.append(map_image)
+        mx, mh = mask[:, hist_length:, :], mask[:, :hist_length, :]
+        mask_x.append(mx)
+        mask_h.append(mh)
     
-    padded_x, padded_hist = torch.stack(padded_batch)[:, :, hist_length:, :], torch.stack(padded_batch)[:, :, :hist_length, :]
-    masks = torch.stack(masks)
+    padded_x, padded_h = torch.stack(padded_x), torch.stack(padded_h)
+    mask_x, mask_h = torch.stack(mask_x), torch.stack(mask_h)
     map_images = torch.stack(map_images)
 
-    return padded_x, padded_hist, map_images, masks
+    return padded_x, padded_h, map_images, mask_x, mask_h
     
     
     
@@ -166,7 +171,7 @@ def main(args):
 
     # Setup data:
     # Dataloader
-    # The dataloader will return a batch of shape [data, mask, map]
+    # The dataloader will return a batch of shape [x, h, map, mask_x, mask_h]
     # of shape [(batch_size, max_agents, seq_length, dim), (batch_size, max_agents, seq_length, dim), (batch_size, H, W, C)]
     dataset = CustomDataset(data_path=args.data_path, map_path=args.map_path)
     loader = DataLoader(
@@ -198,13 +203,14 @@ def main(args):
     for epoch in range(args.epochs):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
-        for x, hist, mp, mask in loader:
+        for x, h, mp, mask_x, mask_h in loader:
             x = x.to(device)
-            hist = hist.to(device)
+            h = h.to(device)
             mp = mp.to(device)
-            mask = mask.to(device)
+            mask_x = mask_x.to(device)
+            mask_h = mask_h.to(device)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(hist=hist, mp=mp, mask=mask)
+            model_kwargs = dict(h=h, mp=mp, mask_x=mask_x, mask_h=mask_h)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
@@ -251,7 +257,7 @@ def main(args):
 
 
 # To launch TrafficDiffuser-S training with multiple GPUs on one node:
-# accelerate launch --multi_gpu train.py
+# accelerate launch --num-processes=1 --gpu_ids 1 train.py --use-history --use-map
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -263,13 +269,13 @@ if __name__ == "__main__":
     parser.add_argument("--seq-length", type=int, default=56)
     parser.add_argument("--hist-length", type=int, default=100)
     parser.add_argument("--dim-size", type=int, default=8)
-    parser.add_argument("--use-map", type=bool, default=True)
-    parser.add_argument("--use-history", type=bool, default=False)
+    parser.add_argument("--use-map", action='store_true', help='using map conditioning')
+    parser.add_argument("--use-history", action='store_true', help='using agent history conditioning')
     parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--global-batch-size", type=int, default=64)
+    parser.add_argument("--global-batch-size", type=int, default=32)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--log-every", type=int, default=13)
-    parser.add_argument("--ckpt-every", type=int, default=1300)
+    parser.add_argument("--log-every", type=int, default=26)
+    parser.add_argument("--ckpt-every", type=int, default=2600)
     args = parser.parse_args()
     main(args)

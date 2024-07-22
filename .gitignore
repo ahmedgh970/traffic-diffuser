@@ -4,6 +4,7 @@ __pycache__/
 
 # Ignore screen log.txt and main.y files
 log.txt
+log1.txt
 main.py
 
 # Ignore results and other directories

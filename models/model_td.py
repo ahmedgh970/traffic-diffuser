@@ -7,7 +7,7 @@ import torchinfo
 from mamba_ssm.modules.mamba_simple import Mamba
 from mamba_ssm.ops.triton.layernorm import RMSNorm
 
-from models.layers import Attention, Mlp, Gmlp, modulate, get_2d_sincos_pos_embed
+from models.layers import MaskedTransformer, Attention, Mlp, Gmlp, modulate, get_2d_sincos_pos_embed
 
 
 
@@ -87,17 +87,87 @@ class HistoryEmbedder(nn.Module):
     """
     History encoding as context to condition the TrafficDiffuser.
     """
-    def __init__(self, hist_length, dim_size, hidden_size, num_heads, depth, mlp_ratio, use_ckpt_wrapper):
+    def __init__(self, max_num_agents, hist_length, dim_size, hidden_size, num_heads, depth, mlp_ratio, use_ckpt_wrapper):
         super().__init__()
+        self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
+        self.proj2 = nn.Linear(hist_length*hidden_size, hidden_size, bias=True)
+        self.proj3 = nn.Linear(max_num_agents*hidden_size, hidden_size, bias=True)     
+        #self.t_pos_embed = nn.Parameter(torch.zeros(1, hist_length, hidden_size), requires_grad=False)
+        self.t_blocks = nn.ModuleList([
+            MaskedTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+        ])
+        #self.a_pos_embed = nn.Parameter(torch.zeros(1, max_num_agents, hidden_size), requires_grad=False)
+        self.a_blocks = nn.ModuleList([
+            MaskedTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+        ])
+        self.use_ckpt_wrapper = use_ckpt_wrapper
+        
+    def ckpt_wrapper(self, module):
+        def ckpt_forward(*inputs):
+            outputs = module(*inputs)
+            return outputs
+        return ckpt_forward
     
-    def forward(self, x):
-        return x
+    def forward(self, h, mask_h):
+        
+        ################# Temporal Attention ########################
+        # h is of shape (B, N, L, D) but should be (B*N, L, H)
+        h = self.proj1(h)                               # (B, N, L, H)
+        B, N, L, H = h.shape[0], h.shape[1], h.shape[2], h.shape[3]
+        h = h.reshape(B*N, L, H)                        # (B*N, L, H)
+
+        # mask_h is of shape (B, N, L, D) but should be (B*N, L, H)
+        msk = None
+        if mask_h is not None:
+            msk = mask_h[:, :, :, 0]                    # (B, N, L)        
+            msk = msk.reshape(B*N, L)                   # (B*N, L)
+            msk = msk.unsqueeze(2)                      # (B*N, L, 1)
+            msk = msk.expand(B*N, L, H).contiguous()    # (B*N, L, H)
+        
+        #h += self.t_pos_embed
+        if self.use_ckpt_wrapper:
+            for block in self.t_blocks:
+                h = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), h, msk, use_reentrant=False)
+        else:
+            for block in self.t_blocks:
+                h = block(h, msk)                       # (B*N, L, H)
+        
+        h = h.reshape(B, N, L, H)                       # (B, N, L, H)       
+        h = h.flatten(2)                                # (B, N, L*H)
+        h = self.proj2(h)                               # (B, N, H)   
+        #############################################################
+        
+        ################### Agent Attention #########################
+        # h is of shape (B, N, H)
+        # mask_h is of shape (B, N, L, D) but should be (B, N, H)
+        if mask_h is not None:
+            msk = mask_h[:, :, 0, 0]                    # (B, N)        
+            msk = msk.unsqueeze(2)                      # (B, N, 1)
+            msk = msk.expand(B, N, H).contiguous()      # (B, N, H)
+            
+        #h += self.a_pos_embed
+        if self.use_ckpt_wrapper:
+            for block in self.a_blocks:
+                h = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), h, msk, use_reentrant=False)  
+        else:
+            for block in self.a_blocks:
+                h = block(h, msk)                       # (B, N, H)
+        #############################################################
+        
+        ##################### Final layer ###########################
+        # h is of shape (B, N, H) but should be (B, H)
+        h = h.flatten(1)                                # (B, N*H)
+        h = self.proj3(h)                               # (B, H)
+        #############################################################
+        
+        return h
+
 
 
 #################################################################################
 #                       Core TrafficDiffuser Model                              #
 #################################################################################
-class MaskedTransformer(nn.Module):
+class AdaMaskedTransformer(nn.Module):
     """
     A Masked Transformer block with adaptive layer norm zero (adaLN-Zero) conditioning
     """
@@ -181,6 +251,7 @@ class TrafficDiffuser(nn.Module):
             self.m_embedder = MapEmbedder(input_size=map_size, output_dim=hidden_size)
         if use_history:
             self.h_embedder = HistoryEmbedder(
+                max_num_agents=max_num_agents,
                 hist_length=hist_length,
                 dim_size=dim_size,
                 hidden_size=hidden_size,
@@ -193,14 +264,13 @@ class TrafficDiffuser(nn.Module):
         self.proj2 = nn.Linear(seq_length*hidden_size, hidden_size, bias=True)     
         #self.t_pos_embed = nn.Parameter(torch.zeros(1, seq_length, hidden_size), requires_grad=False)
         self.t_blocks = nn.ModuleList([
-            MaskedTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            AdaMaskedTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         #self.a_pos_embed = nn.Parameter(torch.zeros(1, max_num_agents, hidden_size), requires_grad=False)
         self.a_blocks = nn.ModuleList([
-            MaskedTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            AdaMaskedTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, seq_length, dim_size) 
-        #self.final_layer = FinalLayer(hidden_size, seq_length, dim_size)
         
         self.use_map = use_map
         self.use_history = use_history
@@ -248,81 +318,81 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, hist=None, mp=None, mask=None):
+    def forward(self, x, t, h=None, mp=None, mask_x=None, mask_h=None):
         """
         Forward pass of TrafficDiffuser.
         - x: (B, N, L, D) tensor of agents where N:max_num_agents, L:sequence_length, and D:sequence_dim
               sequence_dim is the shape of [valid, x, y, h, Vx, Vy, W, L]
-        - mask: (B, N, L, D) tensor of the mask used to pad to the max agents because of the variable num_agent through different scenarios.
-        - hist: (B, N, L0, D) tensor of agents where N:max_num_agents, L0:hist_sequence_length, and D:sequence_dim
-        - mp: (B, C, H, W) tensor of the map per scenario either png of npy file format
         - t: (N,) tensor of diffusion timesteps     
+        - h: (B, N, L0, D) tensor of history agents where N:max_num_agents, L0:hist_sequence_length, and D:sequence_dim
+        - mp: (B, C, H, W) tensor of the map per scenario either png of npy file format
+        - mask_x: (B, N, L, D) tensor of the mask used to pad x to the max agents.
+        - mask_h: (B, N, L0, D) tensor of the mask used to pad h to the max agents.
         """
         
         ###################### Embedders ############################
         # (B, t_max=1000)
-        c = self.t_embedder(t)                # (B, H) ts for diff process
+        c = self.t_embedder(t)                          # (B, H) ts for diff process
         # (B, H, W, C) or (B, F, 2)
         if self.use_map:
-            c += self.m_embedder(mp)          # (B, H)
+            c += self.m_embedder(mp)                    # (B, H)
         if self.use_history:
-            #c += self.h_embedder(hist)        # (B, H)
-            raise ValueError("Not implemented.")
+            c += self.h_embedder(h, mask_h)             # (B, H)
         #############################################################
         
         ################# Temporal Attention ########################
         # x is of shape (B, N, L, D) but should be (B*N, L, H)
-        x = self.proj1(x)                                                   # (B, N, L, H)
+        x = self.proj1(x)                               # (B, N, L, H)
         B, N, L, H = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
-        x = x.reshape(B*N, L, H)                                            # (B*N, L, H)
+        x = x.reshape(B*N, L, H)                        # (B*N, L, H)
 
-        # mask is of shape (B, N, L, D) but should be (B*N, L, H)
+        # mask_x is of shape (B, N, L, D) but should be (B*N, L, H)
         msk = None
-        if mask is not None:
-            msk = mask[:, :, :, 0]                                          # (B, N, L)        
-            msk = msk.reshape(B*N, L)                                       # (B*N, L)
-            msk = msk.unsqueeze(2)                                          # (B*N, L, 1)
-            msk = msk.expand(B*N, L, H).contiguous()                        # (B*N, L, H)
+        if mask_x is not None:
+            msk = mask_x[:, :, :, 0]                    # (B, N, L)        
+            msk = msk.reshape(B*N, L)                   # (B*N, L)
+            msk = msk.unsqueeze(2)                      # (B*N, L, 1)
+            msk = msk.expand(B*N, L, H).contiguous()    # (B*N, L, H)
         
         # c is of shape (B, H) but should be (B*N, H)
-        ct = c.unsqueeze(1)                                                 # (B, 1, H)
-        ct = ct.expand(B, N, H)                                             # (B, N, H)
-        ct = ct.reshape(B*N, H)                                             # (B*N, H)
+        ct = c.unsqueeze(1)                             # (B, 1, H)
+        ct = ct.expand(B, N, H)                         # (B, N, H)
+        ct = ct.reshape(B*N, H)                         # (B*N, H)
         
         #x += self.t_pos_embed
         if self.use_ckpt_wrapper:
             for block in self.t_blocks:
-                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, msk, ct, use_reentrant=False)  # (B*N, L, H)
+                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, msk, ct, use_reentrant=False)
         else:
             for block in self.t_blocks:
-                x = block(x, msk, ct)       # (B*N, L, H)
+                x = block(x, msk, ct)                   # (B*N, L, H)
         
-        x = x.reshape(B, N, L, H)           # (B, N, L, H)       
-        x = x.flatten(2)                    # (B, N, L*H)
-        x = self.proj2(x)                   # (B, N, H)   
+        x = x.reshape(B, N, L, H)                       # (B, N, L, H)       
+        x = x.flatten(2)                                # (B, N, L*H)
+        x = self.proj2(x)                               # (B, N, H)   
         #############################################################
         
         ################### Agent Attention #########################
         # x is of shape (B, N, H)
         # c is of shape (B, H)
-        # mask is of shape (B, N, L, D) but should be (B, N, H)
-        if mask is not None:
-            msk = mask[:, :, 0, 0]                                                               # (B, N)        
-            msk = msk.unsqueeze(2)                                                               # (B, N, 1)
-            msk = msk.expand(B, N, H).contiguous()                                               # (B, N, H)
+        # mask_x is of shape (B, N, L, D) but should be (B, N, H)
+        if mask_x is not None:
+            msk = mask_x[:, :, 0, 0]                    # (B, N)        
+            msk = msk.unsqueeze(2)                      # (B, N, 1)
+            msk = msk.expand(B, N, H).contiguous()      # (B, N, H)
             
         #x += self.a_pos_embed
         if self.use_ckpt_wrapper:
             for block in self.a_blocks:
-                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, msk, c, use_reentrant=False)   # (B, N, H)
+                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, msk, c, use_reentrant=False)  
         else:
             for block in self.a_blocks:
-                x = block(x, msk, c)        # (B, N, H)
+                x = block(x, msk, c)                    # (B, N, H)
         #############################################################
         
         ##################### Final layer ###########################
         # x is of shape (B, N, H)
-        x = self.final_layer(x, mask, c)    # (B, N, L, D)
+        x = self.final_layer(x, mask_x, c)              # (B, N, L, D)
         #############################################################
         
         return x

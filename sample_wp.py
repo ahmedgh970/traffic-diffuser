@@ -13,11 +13,14 @@ import numpy as np
 from PIL import Image
 
 import torch
+import torch.nn as nn
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+import torchvision.transforms as transforms
 
 from diffusion import create_diffusion
 from models.model_td import TrafficDiffuser_models
+
 
 
 def main(args):
@@ -45,32 +48,60 @@ def main(args):
 
     diffusion = create_diffusion(str(args.num_sampling_steps))
     
-    # Create sampling noise:
+    # Create sampling noise
     z = torch.randn(args.num_sampling, args.max_agents, args.seq_length, args.dim_size, device=device)
-
-    # Load scenario history and corresponding map:
-    data_npy = np.load(args.data_path)
+    print('shape of z:', z.shape)
+    
+    # Load scenario history
+    data = np.load(args.data_path)
+    data = torch.tensor(data, dtype=torch.float32)
+    data = data.unsqueeze(0).expand(args.num_sampling, data.size(0), data.size(1), data.size(2))
+    print('shape of data:', data.shape)
+    
+    pad_n = args.max_agents - data.size(1)
+    pad_size = (0, 0, 0, 0, 0, pad_n, 0, 0)  # padding only in the agent dimension
+    padded_data = nn.functional.pad(data, pad_size, "constant", 0.0)
+    h = padded_data[:, :, :args.hist_length, :].to(device)
+    print('shape of h:', h.shape)
+    
+    # Create a mask for valid agents
+    mask = torch.ones((data.size(0), data.size(1), data.size(2), data.size(3)), dtype=torch.float32)
+    mask = nn.functional.pad(mask, pad_size, "constant", 0.0)
+    mask_x = mask[:, :, args.hist_length:, :].to(device)
+    mask_h = mask[:, :, :args.hist_length, :].to(device)
+    print('shape of mask_x:', mask_x.shape)
+    print('shape of mask_h:', mask_h.shape)
+    
+    # Load scenario map
     map_rgb = Image.open(args.map_path).convert('RGB')
-    h = torch.tensor(data_npy[:, :args.hist_length, :], dtype=torch.float32).to(device)
-    mp = map_rgb.ToTensor().to(device)
-    model_kwargs = dict(hist=h, mp=mp, mask_x=None, mask_h=None)
+    mp = transforms.ToTensor()(map_rgb).to(device)
+    mp = mp.unsqueeze(0).expand(args.num_sampling, mp.size(0), mp.size(1), mp.size(2))
+    print('shape of map:', mp.shape)
+
+    model_kwargs = dict(h=h, mp=mp, mask_x=mask_x, mask_h=mask_h)
 
     # Sample trajectories:
     samples = diffusion.p_sample_loop(
         model.forward, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
     )
-
+    samples = samples[:, :data.size(1), :, :]
+    print('shape of pred samples', samples.shape)
+    h = h[:, :data.size(1), :, :]
+    print('shape of hist samples', h.shape)
+    samples = torch.cat((h, samples), dim=2)
+    print('shape of full samples', samples.shape)
+    
     # Save sampled trajectories
     samples_path = args.ckpt.replace("checkpoints", "samples")
     samples_path = os.path.splitext(samples_path)[0] + ".npy"
     samples_dir = os.path.dirname(samples_path)
     if not os.path.exists(samples_dir):
         os.makedirs(samples_dir)
-    np.save(samples.cpu().numpy(), samples_path)
+    np.save(samples_path, samples.cpu().numpy())
 
 
 # To sample from the EMA weights of a custom TrafficDiffuser-L model, run:
-# python sample.py --model TrafficDiffuser-S --ckpt /path/to/model.pt
+# python sample_wp.py --model TrafficDiffuser-S --use-history --use-map --ckpt results/000-TrafficDiffuser-S/checkpoints/0000052.pt
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
