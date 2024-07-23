@@ -12,11 +12,39 @@ def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
+
+class MaskedTransformer(nn.Module):
+    """
+    A Masked Transformer block
+    """
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
+        super().__init__()
+        self.num_heads = num_heads
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.attn = Attention(dim=hidden_size, num_heads=num_heads)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+
+    def forward(self, x, mask):
+        # [(B, N, H), (B, N, H)]
+        # Masked attention
+        x = x + self.attn(self.norm1(x), mask)  # (B, N, H)
+        #if mask is not None:
+        #    x = x * mask                        # (B, N, H)
+        # Mlp/Gmlp
+        x = x + self.mlp(self.norm2(x))         # (B, N, H)
+        #if mask is not None:
+        #    x = x * mask                        # (B, N, H)
+        return x
+    
+    
 class Attention(nn.Module):    
     def __init__(
             self,
-            dim: int,
-            num_heads: int = 8,
+            dim,
+            num_heads,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, 'dim should be divisible by num_heads'
@@ -24,14 +52,15 @@ class Attention(nn.Module):
         self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=num_heads, batch_first=True)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
-        # x of shape (B, L, E) and mask of shape (B, L) 
-        B, L, E = x.shape
-        if mask is not None:                                                                 # (B, L, E) but should be (B*num_heads, L, L)
-            mask = mask[:, :, 0]                                                             # (B, L)
-            mask = mask.unsqueeze(1).unsqueeze(3)                                            # (B, 1, L, 1)
-            mask = mask.expand(B, self.num_heads, L, L).contiguous()                         # (B, num_heads, L, L)
-            mask = mask.view(B * self.num_heads, L, L)                                       # (B*num_heads, L, L)
-        x, _ = self.attn(query=x, key=x, value=x, attn_mask=mask, need_weights=False)        # (B, L, E), None
+        # x and mask are of shape (B, L, E) or mask of shape (B, L)
+        B, L, _ = x.shape
+        if mask is not None:
+            mask = torch.full(mask.shape, float('-inf'), device='cuda:0')                   # transform the mask to have 0.0 and -inf values
+            mask[mask == 1.0] = 0                                                           # (B, L) but should be (B*num_heads, L, L)
+            mask = mask.unsqueeze(1).unsqueeze(2)                                           # (B, 1, 1, L)
+            mask = mask.expand(B, self.num_heads, L, L).contiguous()                        # (B, num_heads, L, L)
+            mask = mask.view(B * self.num_heads, L, L)                                      # (B*num_heads, L, L)
+        x, _ = self.attn(query=x, key=x, value=x, attn_mask=mask, need_weights=False)       # (B, L, E), None
         return x 
     
     
@@ -114,33 +143,6 @@ class Mlp(nn.Module):
         x = self.drop2(x)
         return x
     
-    
-
-class MaskedTransformer(nn.Module):
-    """
-    A Masked Transformer block
-    """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
-        super().__init__()
-        self.num_heads = num_heads
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(dim=hidden_size, num_heads=num_heads)
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-
-    def forward(self, x, mask):
-        # [(B, N, H), (B, N, H)]
-        # Masked attention
-        x = x + self.attn(self.norm1(x), mask)  # (B, N, H)
-        if mask is not None:
-            x = x * mask                        # (B, N, H)
-        # Mlp/Gmlp
-        x = x + self.mlp(self.norm2(x))         # (B, N, H)
-        if mask is not None:
-            x = x * mask                        # (B, N, H)
-        return x
     
     
 class Gmlp(nn.Module):

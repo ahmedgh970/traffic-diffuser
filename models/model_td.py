@@ -116,13 +116,11 @@ class HistoryEmbedder(nn.Module):
         B, N, L, H = h.shape[0], h.shape[1], h.shape[2], h.shape[3]
         h = h.reshape(B*N, L, H)                        # (B*N, L, H)
 
-        # mask_h is of shape (B, N, L, D) but should be (B*N, L, H)
+        # mask_h is of shape (B, N, L, D) but should be (B*N, L)
         msk = None
         if mask_h is not None:
-            msk = mask_h[:, :, :, 0]                    # (B, N, L)        
+            msk = torch.max(mask_h, dim=3)[0]           # (B, N, L)        
             msk = msk.reshape(B*N, L)                   # (B*N, L)
-            msk = msk.unsqueeze(2)                      # (B*N, L, 1)
-            msk = msk.expand(B*N, L, H).contiguous()    # (B*N, L, H)
         
         #h += self.t_pos_embed
         if self.use_ckpt_wrapper:
@@ -139,11 +137,10 @@ class HistoryEmbedder(nn.Module):
         
         ################### Agent Attention #########################
         # h is of shape (B, N, H)
-        # mask_h is of shape (B, N, L, D) but should be (B, N, H)
+        # mask_h is of shape (B, N, L, D) but should be (B, N)
         if mask_h is not None:
-            msk = mask_h[:, :, 0, 0]                    # (B, N)        
-            msk = msk.unsqueeze(2)                      # (B, N, 1)
-            msk = msk.expand(B, N, H).contiguous()      # (B, N, H)
+            msk = torch.max(mask_h, dim=3)[0]           # (B, N, L)
+            msk = torch.max(msk, dim=2)[0]              # (B, N)
             
         #h += self.a_pos_embed
         if self.use_ckpt_wrapper:
@@ -190,12 +187,12 @@ class AdaMaskedTransformer(nn.Module):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         # Masked attention
         x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), mask)  # (B, N, H)
-        if mask is not None:
-            x = x * mask                                                                                # (B, N, H)
+        #if mask is not None:
+        #    x = x * mask                                                                                # (B, N, H)
         # Mlp/Gmlp
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))         # (B, N, H)
-        if mask is not None:
-            x = x * mask                                                                                # (B, N, H)
+        #if mask is not None:
+        #    x = x * mask                                                                                # (B, N, H)
         return x
 
 
@@ -346,13 +343,11 @@ class TrafficDiffuser(nn.Module):
         B, N, L, H = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
 
-        # mask_x is of shape (B, N, L, D) but should be (B*N, L, H)
+        # mask_x is of shape (B, N, L, D) but should be (B*N, L)
         msk = None
         if mask_x is not None:
-            msk = mask_x[:, :, :, 0]                    # (B, N, L)        
+            msk = torch.max(mask_x, dim=3)[0]           # (B, N, L)        
             msk = msk.reshape(B*N, L)                   # (B*N, L)
-            msk = msk.unsqueeze(2)                      # (B*N, L, 1)
-            msk = msk.expand(B*N, L, H).contiguous()    # (B*N, L, H)
         
         # c is of shape (B, H) but should be (B*N, H)
         ct = c.unsqueeze(1)                             # (B, 1, H)
@@ -375,11 +370,10 @@ class TrafficDiffuser(nn.Module):
         ################### Agent Attention #########################
         # x is of shape (B, N, H)
         # c is of shape (B, H)
-        # mask_x is of shape (B, N, L, D) but should be (B, N, H)
+        # mask_x is of shape (B, N, L, D) but should be (B, N)
         if mask_x is not None:
-            msk = mask_x[:, :, 0, 0]                    # (B, N)        
-            msk = msk.unsqueeze(2)                      # (B, N, 1)
-            msk = msk.expand(B, N, H).contiguous()      # (B, N, H)
+            msk = torch.max(mask_x, dim=3)[0]           # (B, N, L)
+            msk = torch.max(msk, dim=2)[0]              # (B, N)
             
         #x += self.a_pos_embed
         if self.use_ckpt_wrapper:

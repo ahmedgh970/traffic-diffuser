@@ -93,7 +93,7 @@ class CustomDataset(Dataset):
     
     
 # Adapt the max_agents from dataset to other
-def collate_fn(batch, max_agents=234, hist_length=100):
+def collate_fn(batch, max_agents=234, hist_length=30):
     padded_x = []
     padded_h = []
     map_images = []
@@ -110,11 +110,13 @@ def collate_fn(batch, max_agents=234, hist_length=100):
         padded_x.append(x)
         padded_h.append(h)
 
-        # Create a mask for valid agents
-        mask = torch.ones((data.size(0), data.size(1), data.size(2)), dtype=torch.float32)
-        mask = nn.functional.pad(mask, pad_size, "constant", 0.0)
-        mx, mh = mask[:, hist_length:, :], mask[:, :hist_length, :]
+        # Create masks for x and hist
+        mx = torch.ones_like(x)
+        mx[x == 0.0] = 0.0
         mask_x.append(mx)
+        
+        mh = torch.ones_like(h)
+        mh[h == 0.0] = 0.0
         mask_h.append(mh)
     
     padded_x, padded_h = torch.stack(padded_x), torch.stack(padded_h)
@@ -210,7 +212,7 @@ def main(args):
             mask_x = mask_x.to(device)
             mask_h = mask_h.to(device)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(h=h, mp=mp, mask_x=mask_x, mask_h=mask_h)
+            model_kwargs = dict(h=h, mp=mp, mask_x=None, mask_h=None)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
@@ -261,14 +263,14 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-path", type=str, default="/data/tii/data/nuscenes_trainval_npy")
+    parser.add_argument("--data-path", type=str, default="/data/tii/data/nuscenes_trainval_npy2")
     parser.add_argument("--map-path", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_maps_png1")
     parser.add_argument("--results-dir", type=str, default="results")
-    parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-S")
+    parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-B")
     parser.add_argument("--max-agents", type=int, default=234)
-    parser.add_argument("--seq-length", type=int, default=56)
-    parser.add_argument("--hist-length", type=int, default=100)
-    parser.add_argument("--dim-size", type=int, default=8)
+    parser.add_argument("--seq-length", type=int, default=10)
+    parser.add_argument("--hist-length", type=int, default=30)
+    parser.add_argument("--dim-size", type=int, default=2)
     parser.add_argument("--use-map", action='store_true', help='using map conditioning')
     parser.add_argument("--use-history", action='store_true', help='using agent history conditioning')
     parser.add_argument("--epochs", type=int, default=500)

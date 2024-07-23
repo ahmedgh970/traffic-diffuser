@@ -6,6 +6,7 @@ __pycache__/
 log.txt
 log1.txt
 main.py
+eval.ipynb
 
 # Ignore results and other directories
 results/*
