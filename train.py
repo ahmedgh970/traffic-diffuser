@@ -1,25 +1,16 @@
 import os
 import argparse
 import logging
-from copy import deepcopy
 from glob import glob
 from time import time
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
-# the first flag below was False when we tested this script but True makes A100 training a lot faster:
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
 from torch.utils.data import Dataset, DataLoader
-import torchvision.transforms as transforms
 
 import numpy as np
-from collections import OrderedDict
 from accelerate import Accelerator
-from PIL import Image
 
-from models.model_td import TrafficDiffuser_models
+from models.model_td_vag import TrafficDiffuser_models
 from diffusion import create_diffusion
 
 
@@ -27,27 +18,6 @@ from diffusion import create_diffusion
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
-@torch.no_grad()
-def update_ema(ema_model, model, decay=0.9999):
-    """
-    Step the EMA model towards the current model.
-    """
-    ema_params = OrderedDict(ema_model.named_parameters())
-    model_params = OrderedDict(model.named_parameters())
-
-    for name, param in model_params.items():
-        name = name.replace("module.", "")
-        ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
-
-
-def requires_grad(model, flag=True):
-    """
-    Set requires_grad flag for all parameters in a model.
-    """
-    for p in model.parameters():
-        p.requires_grad = flag
-
-
 def create_logger(logging_dir):
     """
     Create a logger that writes to a log file and stdout.
@@ -66,67 +36,22 @@ def create_logger(logging_dir):
 #                                Dataloader                                     #
 #################################################################################
 class CustomDataset(Dataset):
-    def __init__(self, data_path, map_path):
+    def __init__(self, data_path, max_agent):
         self.data_path = data_path
-        self.map_path = map_path   
+        self.max_agent = max_agent
         self.data_files = sorted(os.listdir(data_path))
-        self.map_files = sorted(os.listdir(map_path))
-        self.transform = transforms.Compose([
-            #transforms.Resize((256, 256)),
-            transforms.ToTensor(),
-            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Using ImageNet statistics
-        ])
 
     def __len__(self):
-        assert len(self.data_files) == len(self.map_files), \
-            "Number of data files and map files should be same"
         return len(self.data_files)
 
     def __getitem__(self, idx):      
         data_file = self.data_files[idx]
-        map_file = self.map_files[idx]
-
         data_npy = np.load(os.path.join(self.data_path, data_file))
-        map_rgb = Image.open(os.path.join(self.map_path, map_file)).convert('RGB')
-        
-        return torch.tensor(data_npy, dtype=torch.float32), self.transform(map_rgb)
-    
-    
-# Adapt the max_agents from dataset to other
-def collate_fn(batch, max_agents=234, hist_length=30):
-    padded_x = []
-    padded_h = []
-    map_images = []
-    mask_x = []
-    mask_h = []
-    
-    for data, map_image in batch:
-        map_images.append(map_image)
-        
-        pad_n = max_agents - data.size(0)
-        pad_size = (0, 0, 0, 0, 0, pad_n)  # padding only the first dimension
-        padded_data = nn.functional.pad(data, pad_size, "constant", 0.0)
-        x, h = padded_data[:, hist_length:, :], padded_data[:, :hist_length, :]
-        padded_x.append(x)
-        padded_h.append(h)
+        data_tensor = torch.tensor(data_npy[:self.max_agent, :, :], dtype=torch.float32)
+        return data_tensor
 
-        # Create masks for x and hist
-        mx = torch.ones_like(x)
-        mx[x == 0.0] = 0.0
-        mask_x.append(mx)
-        
-        mh = torch.ones_like(h)
-        mh[h == 0.0] = 0.0
-        mask_h.append(mh)
-    
-    padded_x, padded_h = torch.stack(padded_x), torch.stack(padded_h)
-    mask_x, mask_h = torch.stack(mask_x), torch.stack(mask_h)
-    map_images = torch.stack(map_images)
 
-    return padded_x, padded_h, map_images, mask_x, mask_h
-    
-    
-    
+
 #################################################################################
 #                                  Training Loop                                #
 #################################################################################
@@ -149,51 +74,54 @@ def main(args):
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
-
-    # Create model:
-    model = TrafficDiffuser_models[args.model](
-        max_num_agents=args.max_agents,
-        seq_length=args.seq_length,
-        hist_length=args.hist_length,
-        dim_size=args.dim_size,
-        use_map=args.use_map,
-        use_history=args.use_history,
-    )
     
-    # Note that parameter initialization is done within the model constructor
-    model = model.to(device)
-    ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
-    requires_grad(ema, False)
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    if accelerator.is_main_process:
-        logger.info(f"{args.model} Parameters: {sum(p.numel() for p in model.parameters()):,}")
-
-    # Setup optimizer:
-    opt = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
-
-    # Setup data:
-    # Dataloader
-    # The dataloader will return a batch of shape [x, h, map, mask_x, mask_h]
-    # of shape [(batch_size, max_agents, seq_length, dim), (batch_size, max_agents, seq_length, dim), (batch_size, H, W, C)]
-    dataset = CustomDataset(data_path=args.data_path, map_path=args.map_path)
+    # Setup Dataloader
+    # The dataloader will return a batch of tensor x of shape (B, L, D)
+    dataset = CustomDataset(data_path=args.train_dir, max_agent=args.max_num_agents)
     loader = DataLoader(
         dataset,
         batch_size=int(args.global_batch_size // accelerator.num_processes),
         shuffle=True,
-        collate_fn=collate_fn,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
     )
     if accelerator.is_main_process:
-        logger.info(f"Dataset contains {len(dataset):,} scenarios ({args.data_path})")
+        logger.info(f"Dataset contains {len(dataset):,} scenarios ({args.train_dir})")
+        
+    # Create model:
+    model = TrafficDiffuser_models[args.model](
+        max_num_agents = args.max_num_agents,
+        seq_length=args.seq_length,
+        hist_length=args.hist_length,
+        dim_size=args.dim_size,
+        use_history_embed=args.use_history_embed,
+        use_ckpt_wrapper=args.use_ckpt_wrapper,
+    )
+    
+    # Note that parameter initialization is done within the model constructor
+    model = model.to(device)
+    diffusion = create_diffusion(timestep_respacing="", diffusion_steps=args.diffusion_steps)
+    if accelerator.is_main_process:
+        logger.info(f"{args.model} Parameters: {sum(p.numel() for p in model.parameters()):,}")
+
+    # Setup optimizer:
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0) # eps=0.0001
+    #scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    #   opt,
+    #   max_lr=0.0002,
+    #   steps_per_epoch=1,
+    #   epochs=150,
+    #   pct_start=0.02,
+    #   div_factor=100.0,
+    #   final_div_factor=10
+    #)
     
     # Prepare models for training:
-    update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
-    model.train()  # important! This enables embedding dropout for classifier-free guidance
-    ema.eval()  # EMA model should always be in eval mode
+    model.train()
     model, opt, loader = accelerator.prepare(model, opt, loader)
-
+    #model, opt, loader, scheduler = accelerator.prepare(model, opt, loader, scheduler)
+    
     # Variables for monitoring/logging purposes:
     train_steps = 0
     log_steps = 0
@@ -205,21 +133,18 @@ def main(args):
     for epoch in range(args.epochs):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
-        for x, h, mp, mask_x, mask_h in loader:
-            x = x.to(device)
-            h = h.to(device)
-            mp = mp.to(device)
-            mask_x = mask_x.to(device)
-            mask_h = mask_h.to(device)
+        for data in loader:
+            x = data[:, :, args.hist_length:, :].to(device)
+            h = data[:, :, :args.hist_length, :].to(device)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(h=h, mp=mp, mask_x=None, mask_h=None)
+            model_kwargs = dict(h=h)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
             accelerator.backward(loss)
             opt.step()
-            update_ema(ema, model)
-
+            #scheduler.step()
+            
             # Log loss values:
             running_loss += loss.item()
             log_steps += 1
@@ -244,40 +169,66 @@ def main(args):
                 if accelerator.is_main_process:
                     checkpoint = {
                         "model": model.module.state_dict(),
-                        "ema": ema.state_dict(),
                         "opt": opt.state_dict(),
                         "args": args
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
+                    
+                    '''
+                    # Sample trajectories:
+                    for scenario in sorted(os.listdir(args.test_dir)):
+                        data = np.load(os.path.join(args.test_dir, scenario))
+                        data = torch.tensor(data, dtype=torch.float32)
+                        h = data[:args.max_num_agents, :args.hist_length, :].to(device)
+                        h = h.unsqueeze(0).expand(args.num_sampling, h.size(0), h.size(1), h.size(2))
+                        model_kwargs = dict(h=h)
+                        
+                        x = torch.randn(args.num_sampling, args.max_num_agents, args.seq_length, args.dim_size, device=device)
+                        model.module.eval()
+                        samples = diffusion.p_sample_loop(
+                            model.module.forward, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+                        )
+                        model.module.train()
+                        samples = torch.cat((h, samples), dim=2)
+                        
+                        # Save sampled trajectories
+                        samples_path = args.ckpt.replace("checkpoints", "samples")
+                        file_name = scenario.split('/')[-1].split('.npy')[0]      # from absolute path to data file name without extension
+                        samples_path = os.path.splitext(samples_path)[0] + file_name + ".npy"
+                        samples_dir = os.path.dirname(samples_path)
+                        if not os.path.exists(samples_dir):
+                            os.makedirs(samples_dir)
+                        np.save(samples_path, samples.cpu().numpy())
+                    '''
 
-    model.eval()  # important! This disables randomized embedding dropout
-    
     if accelerator.is_main_process:
         logger.info("Done!")
 
 
 # To launch TrafficDiffuser-S training with multiple GPUs on one node:
-# accelerate launch --num-processes=1 --gpu_ids 1 train.py --use-history --use-map
+# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 train.py --model TrafficDiffuser-B --max-num-agents 46 --hist-length 8 --seq-length 5 --use-ckpt-wrapper
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-path", type=str, default="/data/tii/data/nuscenes_trainval_npy2")
-    parser.add_argument("--map-path", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_maps_png1")
+    parser.add_argument("--train-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_train/")
+    parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_test/") 
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-B")
-    parser.add_argument("--max-agents", type=int, default=234)
-    parser.add_argument("--seq-length", type=int, default=10)
-    parser.add_argument("--hist-length", type=int, default=30)
+    parser.add_argument("--max-num-agents", type=int, default=46) # 46 for full and 19 for veh
+    parser.add_argument("--seq-length", type=int, default=5)
+    parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
-    parser.add_argument("--use-map", action='store_true', help='using map conditioning')
-    parser.add_argument("--use-history", action='store_true', help='using agent history conditioning')
-    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--use-history-embed", action='store_true', help='using history embedding conditioning')
+    parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
+    parser.add_argument("--diffusion-steps", type=int, default=1000)
+    parser.add_argument("--num-sampling", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=4000)
     parser.add_argument("--global-batch-size", type=int, default=32)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--log-every", type=int, default=26)
-    parser.add_argument("--ckpt-every", type=int, default=2600)
+    parser.add_argument("--log-every", type=int, default=21)  #-- 698 for full and 664 for veh
+    parser.add_argument("--ckpt-every", type=int, default=21_000)
     args = parser.parse_args()
     main(args)

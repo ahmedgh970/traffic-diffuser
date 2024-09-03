@@ -6,8 +6,9 @@ __pycache__/
 log.txt
 log1.txt
 main.py
-eval.ipynb
+main_sample.py
 
 # Ignore results and other directories
 results/*
 other/*
+copy/*
