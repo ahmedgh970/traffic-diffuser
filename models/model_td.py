@@ -88,24 +88,24 @@ class HistoryEmbedder(nn.Module):
         B, N, L, D = h.shape[0], h.shape[1], h.shape[2], h.shape[3]
         
         ################# Temporal Attention ########################
-        # (B, N, L, D)
-        h = self.proj1(h)                               # (B, N, L, H)
-        h = h.reshape(B*N, L, -1)                       # (B*N, L, H)
+        # [(B, N, L_h, D), (B, N, H)]
+        c = c.reshape(B*N, -1)                          # (B*N, H)
+        h = self.proj1(h)                               # (B, N, L_h, H)
+        h = h.reshape(B*N, L, -1)                       # (B*N, L_h, H)
         h = h + self.pos_embed
-        
         if self.use_ckpt_wrapper:
             for block in self.blocks:
                 h = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), h, c, use_reentrant=False)
         else:
             for block in self.blocks:
-                h = block(h, c)                            # (B*N, L, H)
+                h = block(h, c)                         # (B*N, L_h, H)
         #############################################################
         
         ##################### Final layer ###########################
-        # (B*N, L, H)
-        h = h.reshape(B, N, L, -1)                      # (B, N, L, H)
-        h = h.flatten(2)                                # (B, N, L*H)
-        h = self.norm_final(h)                          # (B, N, L*H)
+        # (B*N, L_h, H)
+        h = h.reshape(B, N, L, -1)                      # (B, N, L_h, H)
+        h = h.flatten(2)                                # (B, N, L_h*H)
+        h = self.norm_final(h)                          # (B, N, L_h*H)
         h = self.proj2(h)                               # (B, N, H)
         #############################################################
         
@@ -226,39 +226,39 @@ class TrafficDiffuser(nn.Module):
         
         ##################### Cat and Proj ##########################
         # (B, N, L_x, D), (B, N, L_h, D)
-        x = torch.cat((h, x), dim=2)
+        x = torch.cat((h, x), dim=2)                    # (B, N, L, D)
         x = self.proj1(x)                               # (B, N, L, H)
         B, N, L, H = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
         #############################################################
         
         ###################### Embedders ############################
         # (B, t_max=1000)
-        c = self.t_embedder(t)                          # (B, H) ts for diff process
+        ct = self.t_embedder(t)                         # (B, H) ts for diff process
+        ct = ct.unsqueeze(1)                            # (B, 1, H)
+        c = ct.expand(B, N, H).contiguous()             # (B, N, H)
+        
         # (B, N, L0, D)
         if self.use_history_embed:
-            ch = self.h_embedder(h)                     # (B, N, H)
-        
-        ct = c.unsqueeze(1)                             # (B, 1, H)
-        ct = ct.expand(B, N, H).contiguous()            # (B, N, H)
-        if self.use_history_embed:
-            ct += ch                                    # (B, N, H)
-        ct = ct.reshape(B*N, H)                         # (B*N, H)
+            ch = self.h_embedder(h, c)                  # (B, N, H)
+            c += ch                                     # (B, N, H)
+        c = c.reshape(B*N, H)                           # (B*N, H)
         #############################################################
         
         ################# Temporal Attention ########################
+        # [(B, N, L, H), (B*N, H)]
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
         x += self.t_pos_embed                           # (B*N, L, H)
         if self.use_ckpt_wrapper:
             for block in self.t_blocks:
-                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, ct, use_reentrant=False)
+                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c, use_reentrant=False)
         else:
             for block in self.t_blocks:
-                x = block(x, ct)                        # (B*N, L, H)
+                x = block(x, c)                         # (B*N, L, H)
         #############################################################
         
         ##################### Final layer ###########################
         # [(B*N, L, H), (B*N, H)]
-        x = self.final_layer(x, ct)                     # (B, N, L, D)
+        x = self.final_layer(x, c)                      # (B, N, L, D)
         #############################################################
         
         return x[:, :, self.hist_length:, :]
