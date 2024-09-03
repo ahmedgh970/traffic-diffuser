@@ -10,7 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from accelerate import Accelerator
 
-from models.model_td_vag import TrafficDiffuser_models
+from models.model_td import TrafficDiffuser_models
 from diffusion import create_diffusion
 
 

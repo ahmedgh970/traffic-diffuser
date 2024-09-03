@@ -9,7 +9,7 @@ from datetime import datetime
 import torch
 
 from diffusion import create_diffusion
-from models.model_td_vag import TrafficDiffuser_models
+from models.model_td import TrafficDiffuser_models
 from metrics import *
 #torch.manual_seed(1234)
 
@@ -67,7 +67,7 @@ def main(args):
     log_filename = create_log_file(log_dir=os.path.dirname(os.path.dirname(args.ckpt)))
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message)s')
 
-    # Sample trajectories from testset and evaluate:
+    # Sample trajectories from testset:
     average_metrics = []
     for scenario in sorted(os.listdir(args.test_dir)):
         data = np.load(os.path.join(args.test_dir, scenario))
@@ -144,7 +144,7 @@ def main(args):
     dataset_area, dataset_diff_dist_travelled, dataset_frechet_dist, dataset_ade, dataset_fde = zip(*average_metrics)
     
     # Logging the results
-    logging.info(f"The average result across all scenarios in the test-set:")
+    logging.info(f"The average evaluation results across all scenarios:")
     logging.info(f" - Polygone Area (PA): {mean(dataset_area)}")
     logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(dataset_diff_dist_travelled)}")
     logging.info(f" - Frechet Distance (FD): {mean(dataset_frechet_dist)}")

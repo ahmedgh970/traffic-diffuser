@@ -6,7 +6,6 @@ __pycache__/
 log.txt
 log1.txt
 main.py
-main_sample.py
 
 # Ignore results and other directories
 results/*
