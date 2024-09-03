@@ -10,7 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from accelerate import Accelerator
 
-from models.model_td import TrafficDiffuser_models
+from models.model_td_mamba import TrafficDiffuser_models
 from diffusion import create_diffusion
 
 
@@ -209,7 +209,7 @@ def main(args):
 
 
 # To launch TrafficDiffuser-S training with multiple GPUs on one node:
-# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 train.py --model TrafficDiffuser-B --max-num-agents 46 --hist-length 8 --seq-length 5 --use-ckpt-wrapper
+# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 train_mamba.py --model TrafficDiffuser-B --max-num-agents 46 --hist-length 8 --seq-length 5 --use-ckpt-wrapper
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.layers import modulate, AdaTransformer
+from models.layers import modulate, AdaDiMT
 
 
 
@@ -57,13 +57,13 @@ class HistoryEmbedder(nn.Module):
     """
     History encoding as context to condition the TrafficDiffuser.
     """
-    def __init__(self, max_num_agents, hist_length, dim_size, hidden_size, num_heads, depth, use_gmlp, mlp_ratio, use_ckpt_wrapper):
+    def __init__(self, max_num_agents, hist_length, dim_size, hidden_size, depth, use_gmlp, mlp_ratio, use_ckpt_wrapper):
         super().__init__()
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         self.proj2 = nn.Linear(hist_length*hidden_size, hidden_size, bias=True)
         self.pos_embed = nn.Parameter(torch.zeros(1, hist_length, hidden_size), requires_grad=True)
         self.blocks = nn.ModuleList([
-            AdaTransformer(hidden_size, num_heads, use_gmlp=use_gmlp, mlp_ratio=mlp_ratio) for _ in range(depth)
+            AdaDiMT(hidden_size, use_gmlp=use_gmlp, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.norm_final = nn.LayerNorm(hist_length*hidden_size, elementwise_affine=False, eps=1e-6)
         self.use_ckpt_wrapper = use_ckpt_wrapper
@@ -168,7 +168,6 @@ class TrafficDiffuser(nn.Module):
                 hist_length=hist_length,
                 dim_size=dim_size,
                 hidden_size=hidden_size,
-                num_heads=num_heads,
                 depth=depth,
                 use_gmlp=use_gmlp,
                 mlp_ratio=mlp_ratio,
@@ -178,7 +177,7 @@ class TrafficDiffuser(nn.Module):
         
         self.t_pos_embed = nn.Parameter(torch.zeros(1, hist_length+seq_length, hidden_size), requires_grad=True)
         self.t_blocks = nn.ModuleList([
-            AdaTransformer(hidden_size, num_heads, use_gmlp=use_gmlp, mlp_ratio=mlp_ratio) for _ in range(depth)
+            AdaDiMT(hidden_size, use_gmlp=use_gmlp, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         
         self.final_layer = FinalLayer(max_num_agents, hist_length+seq_length, dim_size, hidden_size) 

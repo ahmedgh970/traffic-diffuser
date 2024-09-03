@@ -9,5 +9,4 @@ main.py
 
 # Ignore results and other directories
 results/*
-other/*
 copy/*

@@ -9,7 +9,7 @@ from datetime import datetime
 import torch
 
 from diffusion import create_diffusion
-from models.model_td import TrafficDiffuser_models
+from models.model_td_mamba import TrafficDiffuser_models
 from metrics import *
 #torch.manual_seed(1234)
 
@@ -154,7 +154,7 @@ def main(args):
 
 
 # To sample from the EMA weights of a custom TrafficDiffuser-L model, run:
-# python sample.py --use-ckpt-wrapper --ckpt /data/ahmed.ghorbel/workdir/autod/TrafficDiffuser/results/007-TrafficDiffuser-B/checkpoints/0084000.pt
+# python sample_mamba.py --use-ckpt-wrapper --ckpt /data/ahmed.ghorbel/workdir/autod/TrafficDiffuser/results/007-TrafficDiffuser-B/checkpoints/0084000.pt
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
