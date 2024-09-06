@@ -20,16 +20,15 @@
 - [x] Train a fully padded model (agent and sequence length) with the best configuration
 - [x] Preprocess the entire dataset
 - [x] Implement evaluation script
-- [ ] Preprocess the map features
-- [ ] Add conditioning on the map
+- [x] Preprocess the map features
+- [ ] Rename the raster map files to be the same as trainval_clean train /test 
+- [ ] Implement a CNN map_embedder on rasterized maps
 - [ ] Tune architecture and report results with all metrics
 
 ## Bugs
 - [x] Fix bugs related to the `HistoryEmbedder`
 
 ## Enhancements
-- [ ] Improve generation quality with agent attention
-- [ ] Enhance generation using classifier-free guidance based on agent type
 
 ## Conclusions
 - [Yes] Does conditioning on the final layer enhance generation?
@@ -45,5 +44,5 @@
 - [Yes] Does using the mask only in the final layer enhance generation?
 - [No] Does using the second type of masking (mask at the beginning and end, with mask from `h` referring to padded agents) improve results?
 - [No] Should we apply the mask?
-- [ ] Does agent attention enhance trajectory generation with respect to each agent?
+- [No] Does agent attention enhance trajectory generation with respect to each agent?
 - [ ] Does map conditioning enhance trajectory generation?

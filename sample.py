@@ -1,7 +1,6 @@
 import os
 import argparse
 import numpy as np
-import matplotlib.pyplot as plt
 from statistics import mean
 import logging
 from datetime import datetime
@@ -11,7 +10,9 @@ import torch
 from diffusion import create_diffusion
 from models.model_td import TrafficDiffuser_models
 from metrics import *
+
 #torch.manual_seed(1234)
+
 
 
 # Function to create a unique log file name
@@ -51,8 +52,9 @@ def main(args):
         seq_length=args.seq_length,
         hist_length=args.hist_length,
         dim_size=args.dim_size,
+        map_size=args.map_size,
         use_gmlp=args.use_gmlp,
-        use_history_embed=args.use_history_embed,
+        use_map_embed=args.use_history_embed,
         use_ckpt_wrapper=args.use_ckpt_wrapper,
     ).to(device)
     
@@ -154,20 +156,21 @@ def main(args):
 
 
 # To sample from the EMA weights of a custom TrafficDiffuser-L model, run:
-# python sample.py --use-ckpt-wrapper --ckpt /data/ahmed.ghorbel/workdir/autod/TrafficDiffuser/results/007-TrafficDiffuser-B/checkpoints/0084000.pt
+# python sample.py --use-map-embed --use-ckpt-wrapper --ckpt /data/ahmed.ghorbel/workdir/autod/TrafficDiffuser/results/006-TrafficDiffuser-B/checkpoints/0084000.pt
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_test")
+    parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_test")  # 149 scenarios
     parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-B")
     parser.add_argument("--max-num-agents", type=int, default=46)
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
+    parser.add_argument("--map-size", type=int, default=256)
     parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp in place of mlp')
-    parser.add_argument("--use-history-embed", action='store_true', help='using history embedding conditioning')
+    parser.add_argument("--use-map-embed", action='store_true', help='using history embedding conditioning')
     parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
-    parser.add_argument("--num-sampling", type=int, default=100)
+    parser.add_argument("--num-sampling", type=int, default=10)
     parser.add_argument("--num-sampling-steps", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ckpt", type=str, default=None)

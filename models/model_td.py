@@ -1,8 +1,6 @@
 import math
-
 import torch
 import torch.nn as nn
-
 from models.layers import modulate, AdaTransformer
 
 
@@ -51,19 +49,16 @@ class TimestepEmbedder(nn.Module):
         return t_emb
 
     
-class HistoryEmbedder(nn.Module):
+class MapEmbedder(nn.Module):
     """
-    History encoding as context to condition the TrafficDiffuser.
+    Map encoding as context to condition the TrafficDiffuser.
     """
-    def __init__(self, max_num_agents, hist_length, dim_size, hidden_size, num_heads, depth, use_gmlp, mlp_ratio, use_ckpt_wrapper):
+    def __init__(self, map_size, hidden_size, use_ckpt_wrapper):
         super().__init__()
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
-        self.proj2 = nn.Linear(hist_length*hidden_size, hidden_size, bias=True)
-        self.pos_embed = nn.Parameter(torch.zeros(1, hist_length, hidden_size), requires_grad=True)
-        self.blocks = nn.ModuleList([
-            AdaTransformer(hidden_size, num_heads, use_gmlp=use_gmlp, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
-        self.norm_final = nn.LayerNorm(hist_length*hidden_size, elementwise_affine=False, eps=1e-6)
+        self.proj2 = nn.Linear(map_length*hidden_size, hidden_size, bias=True)
+
+        self.norm_final = nn.LayerNorm(map_length*hidden_size, elementwise_affine=False, eps=1e-6)
         self.use_ckpt_wrapper = use_ckpt_wrapper
         self.initialize_weights()
 
@@ -82,32 +77,20 @@ class HistoryEmbedder(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, h, c):
-        B, N, L, D = h.shape[0], h.shape[1], h.shape[2], h.shape[3]
+    def forward(self, m):
+        B, H, W, C = m.shape[0], m.shape[1], m.shape[2], m.shape[3]
         
-        ################# Temporal Attention ########################
-        # [(B, N, L_h, D), (B, N, H)]
-        c = c.reshape(B*N, -1)                          # (B*N, H)
-        h = self.proj1(h)                               # (B, N, L_h, H)
-        h = h.reshape(B*N, L, -1)                       # (B*N, L_h, H)
-        h = h + self.pos_embed
-        if self.use_ckpt_wrapper:
-            for block in self.blocks:
-                h = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), h, c, use_reentrant=False)
-        else:
-            for block in self.blocks:
-                h = block(h, c)                         # (B*N, L_h, H)
+        #################### Map Encoding ###########################
+        
+        
         #############################################################
         
         ##################### Final layer ###########################
-        # (B*N, L_h, H)
-        h = h.reshape(B, N, L, -1)                      # (B, N, L_h, H)
-        h = h.flatten(2)                                # (B, N, L_h*H)
-        h = self.norm_final(h)                          # (B, N, L_h*H)
-        h = self.proj2(h)                               # (B, N, H)
+
+
         #############################################################
         
-        return h
+        return m
 
 
 #################################################################################
@@ -131,7 +114,7 @@ class FinalLayer(nn.Module):
         )
 
     def forward(self, x, c):
-        # [(B*N, L, H), (B*N, H)]
+        # (B*N, L, H), (B*N, H)
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)                 # (B*N, H), (B*N, H)
         x = modulate(self.norm_final(x), shift, scale)                          # (B*N, L, H)
         x = self.linear(x)                                                      # (B*N, L, D)
@@ -149,8 +132,9 @@ class TrafficDiffuser(nn.Module):
         seq_length,
         hist_length,
         dim_size,
+        map_size,
         use_gmlp,
-        use_history_embed,
+        use_map_embed,
         use_ckpt_wrapper,
         hidden_size,
         num_heads,
@@ -158,20 +142,14 @@ class TrafficDiffuser(nn.Module):
         mlp_ratio=4.0,
     ):
         super().__init__()
-        self.hist_length = hist_length  
         self.t_embedder = TimestepEmbedder(hidden_size)
-        if use_history_embed:
-            self.h_embedder = HistoryEmbedder(
-                max_num_agents=max_num_agents,
-                hist_length=hist_length,
-                dim_size=dim_size,
+        if use_map_embed:
+            self.m_embedder = MapEmbedder(
+                map_size=map_size,
                 hidden_size=hidden_size,
-                num_heads=num_heads,
-                depth=depth,
-                use_gmlp=use_gmlp,
-                mlp_ratio=mlp_ratio,
                 use_ckpt_wrapper=use_ckpt_wrapper
             )
+            
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         
         self.t_pos_embed = nn.Parameter(torch.zeros(1, hist_length+seq_length, hidden_size), requires_grad=True)
@@ -181,7 +159,8 @@ class TrafficDiffuser(nn.Module):
         
         self.final_layer = FinalLayer(max_num_agents, hist_length+seq_length, dim_size, hidden_size) 
         
-        self.use_history_embed = use_history_embed
+        self.hist_length = hist_length
+        self.use_map_embed = use_map_embed
         self.use_ckpt_wrapper = use_ckpt_wrapper
         self.initialize_weights()
 
@@ -215,12 +194,13 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, h):
+    def forward(self, x, t, h, m):
         """
         Forward pass of TrafficDiffuser.
         - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
         - h: (B, N, L_h, D) tensor of history agents where N:max_num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
+        - m: (B, H, W, C) tensor of the rasterized map
         """
         
         ##################### Cat and Proj ##########################
@@ -231,19 +211,17 @@ class TrafficDiffuser(nn.Module):
         #############################################################
         
         ###################### Embedders ############################
-        # (B, t_max=1000)
-        c = self.t_embedder(t)                         # (B, H) ts for diff process
-        c = c.unsqueeze(1)                             # (B, 1, H)
-        c = c.expand(B, N, H).contiguous()             # (B, N, H)
-        
-        # [(B, N, L_h, D), (B, N, H)]
-        if self.use_history_embed:
-            c = c + self.h_embedder(h, c)              # (B, N, H)
+        # (B, t_max=1000), (B, H, W, C)
+        c = self.t_embedder(t)                          # (B, H) ts for diff process
+        if self.use_map_embed:
+            c = c + self.m_embedder(m)                  # (B, H)
+        c = c.unsqueeze(1)                              # (B, 1, H)
+        c = c.expand(B, N, H).contiguous()              # (B, N, H)
+        c = c.reshape(B*N, H)                           # (B*N, H)
         #############################################################
         
         ################# Temporal Attention ########################
-        # [(B, N, L, H), (B, N, H)]
-        c = c.reshape(B*N, H)                           # (B*N, H)
+        # (B, N, L, H), (B*N, H)
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
         x = x + self.t_pos_embed                        # (B*N, L, H)
         if self.use_ckpt_wrapper:
@@ -255,7 +233,7 @@ class TrafficDiffuser(nn.Module):
         #############################################################
         
         ##################### Final layer ###########################
-        # [(B*N, L, H), (B*N, H)]
+        # (B*N, L, H), (B*N, H)
         x = self.final_layer(x, c)                      # (B, N, L, D)
         #############################################################
         

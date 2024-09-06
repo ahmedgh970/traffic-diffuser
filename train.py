@@ -36,19 +36,26 @@ def create_logger(logging_dir):
 #                                Dataloader                                     #
 #################################################################################
 class CustomDataset(Dataset):
-    def __init__(self, data_path, max_agent):
+    def __init__(self, data_path, max_agent, map_path):
         self.data_path = data_path
         self.max_agent = max_agent
+        self.map_path = map_path
         self.data_files = sorted(os.listdir(data_path))
+        self.map_files = sorted(os.listdir(map_path))
 
     def __len__(self):
-        return len(self.data_files)
+        return len(self.data_files), len(self.map_files)
 
     def __getitem__(self, idx):      
         data_file = self.data_files[idx]
         data_npy = np.load(os.path.join(self.data_path, data_file))
         data_tensor = torch.tensor(data_npy[:self.max_agent, :, :], dtype=torch.float32)
-        return data_tensor
+        
+        map_file = self.map_files[idx]
+        map_npy = np.load(os.path.join(self.map_path, map_file))
+        map_tensor = torch.tensor(map_npy, dtype=torch.float32)
+        
+        return data_tensor, map_tensor
 
 
 
@@ -95,8 +102,9 @@ def main(args):
         seq_length=args.seq_length,
         hist_length=args.hist_length,
         dim_size=args.dim_size,
+        map_size=args.map_size,
         use_gmlp=args.use_gmlp,
-        use_history_embed=args.use_history_embed,
+        use_map_embed=args.use_map_embed,
         use_ckpt_wrapper=args.use_ckpt_wrapper,
     )
     
@@ -124,11 +132,12 @@ def main(args):
     for epoch in range(args.epochs):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
-        for data in loader:
+        for data, m in loader:
             x = data[:, :, args.hist_length:, :].to(device)
             h = data[:, :, :args.hist_length, :].to(device)
+            m = m.to(device)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(h=h)
+            model_kwargs = dict(h=h, m=m)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
@@ -171,20 +180,20 @@ def main(args):
 
 
 # To launch TrafficDiffuser-S training with multiple GPUs on one node:
-# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 train.py --model TrafficDiffuser-B --max-num-agents 46 --hist-length 8 --seq-length 5 --use-ckpt-wrapper
+# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 train.py --model TrafficDiffuser-B --max-num-agents 46 --hist-length 8 --seq-length 5 --use-map-embed --use-ckpt-wrapper
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_train/")
-    parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_test/") 
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-B")
     parser.add_argument("--max-num-agents", type=int, default=46) # 46 for full and 19 for veh
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
+    parser.add_argument("--map-size", type=int, default=256)
     parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp instead of mlp')
-    parser.add_argument("--use-history-embed", action='store_true', help='using history embedding conditioning')
+    parser.add_argument("--use-map-embed", action='store_true', help='using map embedding conditioning')
     parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
     parser.add_argument("--diffusion-steps", type=int, default=1000)
     parser.add_argument("--epochs", type=int, default=4000)
