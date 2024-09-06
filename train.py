@@ -108,20 +108,10 @@ def main(args):
 
     # Setup optimizer:
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0) # eps=0.0001
-    #scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    #   opt,
-    #   max_lr=0.0002,
-    #   steps_per_epoch=1,
-    #   epochs=150,
-    #   pct_start=0.02,
-    #   div_factor=100.0,
-    #   final_div_factor=10
-    #)
     
     # Prepare models for training:
     model.train()
     model, opt, loader = accelerator.prepare(model, opt, loader)
-    #model, opt, loader, scheduler = accelerator.prepare(model, opt, loader, scheduler)
     
     # Variables for monitoring/logging purposes:
     train_steps = 0
@@ -144,7 +134,6 @@ def main(args):
             opt.zero_grad()
             accelerator.backward(loss)
             opt.step()
-            #scheduler.step()
             
             # Log loss values:
             running_loss += loss.item()
@@ -176,33 +165,6 @@ def main(args):
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
-                    
-                    '''
-                    # Sample trajectories:
-                    for scenario in sorted(os.listdir(args.test_dir)):
-                        data = np.load(os.path.join(args.test_dir, scenario))
-                        data = torch.tensor(data, dtype=torch.float32)
-                        h = data[:args.max_num_agents, :args.hist_length, :].to(device)
-                        h = h.unsqueeze(0).expand(args.num_sampling, h.size(0), h.size(1), h.size(2))
-                        model_kwargs = dict(h=h)
-                        
-                        x = torch.randn(args.num_sampling, args.max_num_agents, args.seq_length, args.dim_size, device=device)
-                        model.module.eval()
-                        samples = diffusion.p_sample_loop(
-                            model.module.forward, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
-                        )
-                        model.module.train()
-                        samples = torch.cat((h, samples), dim=2)
-                        
-                        # Save sampled trajectories
-                        samples_path = args.ckpt.replace("checkpoints", "samples")
-                        file_name = scenario.split('/')[-1].split('.npy')[0]      # from absolute path to data file name without extension
-                        samples_path = os.path.splitext(samples_path)[0] + file_name + ".npy"
-                        samples_dir = os.path.dirname(samples_path)
-                        if not os.path.exists(samples_dir):
-                            os.makedirs(samples_dir)
-                        np.save(samples_path, samples.cpu().numpy())
-                    '''
 
     if accelerator.is_main_process:
         logger.info("Done!")
@@ -221,11 +183,10 @@ if __name__ == "__main__":
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
-    parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp in place of mlp')
+    parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp instead of mlp')
     parser.add_argument("--use-history-embed", action='store_true', help='using history embedding conditioning')
     parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
     parser.add_argument("--diffusion-steps", type=int, default=1000)
-    parser.add_argument("--num-sampling", type=int, default=10)
     parser.add_argument("--epochs", type=int, default=4000)
     parser.add_argument("--global-batch-size", type=int, default=32)
     parser.add_argument("--global-seed", type=int, default=0)

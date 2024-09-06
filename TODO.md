@@ -20,8 +20,9 @@
 - [x] Train a fully padded model (agent and sequence length) with the best configuration
 - [x] Preprocess the entire dataset
 - [x] Implement evaluation script
+- [ ] Preprocess the map features
+- [ ] Add conditioning on the map
 - [ ] Tune architecture and report results with all metrics
-- [ ] Add conditioning on a map
 
 ## Bugs
 - [x] Fix bugs related to the `HistoryEmbedder`
