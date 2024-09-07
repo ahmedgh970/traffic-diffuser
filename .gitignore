@@ -7,6 +7,10 @@ log.txt
 log1.txt
 main.py
 
+# Ignore preprocessing and evaluation jupyter notebooks
+process_dataset.ipynb
+eval.ipynb
+
 # Ignore results and other directories
 results/*
 copy/*
