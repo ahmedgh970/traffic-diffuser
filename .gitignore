@@ -8,8 +8,8 @@ log1.txt
 main.py
 
 # Ignore preprocessing and evaluation jupyter notebooks
-process_dataset.ipynb
-eval.ipynb
+preprocess_dataset.ipynb
+evaluate.ipynb
 
 # Ignore results and other directories
 results/*
