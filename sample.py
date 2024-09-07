@@ -52,7 +52,7 @@ def main(args):
         seq_length=args.seq_length,
         hist_length=args.hist_length,
         dim_size=args.dim_size,
-        map_size=args.map_size,
+        map_channels=args.map_channels,
         use_gmlp=args.use_gmlp,
         use_map_embed=args.use_history_embed,
         use_ckpt_wrapper=args.use_ckpt_wrapper,
@@ -72,12 +72,18 @@ def main(args):
 
     # Sample trajectories from testset:
     average_metrics = []
-    for scenario in sorted(os.listdir(args.test_dir)):
+    for scenario, mp in zip(sorted(os.listdir(args.test_dir)), sorted(os.listdir(args.map_test_dir))):
         data = np.load(os.path.join(args.test_dir, scenario))
         data = torch.tensor(data[:args.max_num_agents, :, :], dtype=torch.float32).to(device)
         data = data.unsqueeze(0).expand(args.num_sampling, data.size(0), data.size(1), data.size(2))
-        h = data[:, :, :args.hist_length, :]
-        model_kwargs = dict(h=h)
+        h = data[:, :, :args.hist_length, :]        
+        if args.use_map_embed:
+            m = np.load(os.path.join(args.map_test_dir, mp))
+            m = torch.tensor(m, dtype=torch.float32).to(device)
+            m = m.unsqueeze(0).expand(args.num_sampling, m.size(0), m.size(1), m.size(2))
+            model_kwargs = dict(h=h, m=m)
+        else:
+            model_kwargs = dict(h=h)
         
         # Create sampling noise:
         x = torch.randn(args.num_sampling, args.max_num_agents, args.seq_length, args.dim_size, device=device)
@@ -160,13 +166,14 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_test")  # 149 scenarios
+    parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_test")  # 149 scenarios and 19 ag
+    parser.add_argument("--map-test-dir", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_raster_test")
     parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-B")
     parser.add_argument("--max-num-agents", type=int, default=46)
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
-    parser.add_argument("--map-size", type=int, default=256)
+    parser.add_argument("--map-channels", type=int, default=4)
     parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp in place of mlp')
     parser.add_argument("--use-map-embed", action='store_true', help='using history embedding conditioning')
     parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')

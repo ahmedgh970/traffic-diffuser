@@ -1,6 +1,7 @@
 import math
 import torch
 import torch.nn as nn
+import torchvision.models as models
 from models.layers import modulate, AdaTransformer
 
 
@@ -48,49 +49,30 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
-    
+
 class MapEmbedder(nn.Module):
     """
     Map encoding as context to condition the TrafficDiffuser.
-    """
-    def __init__(self, map_size, hidden_size, use_ckpt_wrapper):
-        super().__init__()
-        self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
-        self.proj2 = nn.Linear(map_length*hidden_size, hidden_size, bias=True)
-
-        self.norm_final = nn.LayerNorm(map_length*hidden_size, elementwise_affine=False, eps=1e-6)
-        self.use_ckpt_wrapper = use_ckpt_wrapper
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        # Initialize transformer layers:
-        def _basic_init(module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-        self.apply(_basic_init)
+    """ 
+    def __init__(self, map_channels, hidden_size):
+        super().__init__()      
+        # Load pretrained ResNet, modify the first convolutional layer to accept 4-channel input,
+        # and remove the final fully connected layer
+        self.resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        self.resnet.conv1 = nn.Conv2d(map_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
         
-    def ckpt_wrapper(self, module):
-        def ckpt_forward(*inputs):
-            outputs = module(*inputs)
-            return outputs
-        return ckpt_forward
-    
-    def forward(self, m):
-        B, H, W, C = m.shape[0], m.shape[1], m.shape[2], m.shape[3]
+        # Final projection and normalization 
+        self.proj_final = nn.Linear(512, hidden_size, bias=True)
+        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         
-        #################### Map Encoding ###########################
-        
-        
-        #############################################################
-        
-        ##################### Final layer ###########################
-
-
-        #############################################################
-        
-        return m
+    def forward(self, x):
+        # (B, C, H, W)
+        x = self.resnet(x)              # (B, 512, 1, 1)
+        x = x.flatten(1)                # (B, 512)
+        x = self.proj_final(x)          # (B, hidden_size)
+        x = self.norm_final(x)          # (B, hidden_size)
+        return x
 
 
 #################################################################################
@@ -132,7 +114,7 @@ class TrafficDiffuser(nn.Module):
         seq_length,
         hist_length,
         dim_size,
-        map_size,
+        map_channels,
         use_gmlp,
         use_map_embed,
         use_ckpt_wrapper,
@@ -145,9 +127,8 @@ class TrafficDiffuser(nn.Module):
         self.t_embedder = TimestepEmbedder(hidden_size)
         if use_map_embed:
             self.m_embedder = MapEmbedder(
-                map_size=map_size,
+                map_channels=map_channels,
                 hidden_size=hidden_size,
-                use_ckpt_wrapper=use_ckpt_wrapper
             )
             
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
@@ -194,7 +175,7 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, h, m):
+    def forward(self, x, t, h, m=None):
         """
         Forward pass of TrafficDiffuser.
         - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions

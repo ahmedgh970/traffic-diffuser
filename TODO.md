@@ -20,10 +20,11 @@
 - [x] Train a fully padded model (agent and sequence length) with the best configuration
 - [x] Preprocess the entire dataset
 - [x] Implement evaluation script
+- [x] Tune the architecture (try mamba, gmlp, ...)
 - [x] Preprocess the map features
-- [ ] Rename the raster map files to be the same as trainval_clean train /test 
-- [ ] Implement a CNN map_embedder on rasterized maps
-- [ ] Tune architecture and report results with all metrics
+- [x] Rename the raster map files to be the same as trainval_clean train /test 
+- [x] Implement a CNN map_embedder on rasterized maps
+- [ ] Report results with all metrics
 
 ## Bugs
 - [x] Fix bugs related to the `HistoryEmbedder`

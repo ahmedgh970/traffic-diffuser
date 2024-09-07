@@ -10,3 +10,4 @@ main.py
 # Ignore results and other directories
 results/*
 copy/*
+data/*

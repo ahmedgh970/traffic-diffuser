@@ -44,7 +44,7 @@ class CustomDataset(Dataset):
         self.map_files = sorted(os.listdir(map_path))
 
     def __len__(self):
-        return len(self.data_files), len(self.map_files)
+        return len(self.data_files)
 
     def __getitem__(self, idx):      
         data_file = self.data_files[idx]
@@ -84,7 +84,7 @@ def main(args):
     
     # Setup Dataloader
     # The dataloader will return a batch of tensor x of shape (B, L, D)
-    dataset = CustomDataset(data_path=args.train_dir, max_agent=args.max_num_agents)
+    dataset = CustomDataset(data_path=args.train_dir, max_agent=args.max_num_agents, map_path=args.map_train_dir,)
     loader = DataLoader(
         dataset,
         batch_size=int(args.global_batch_size // accelerator.num_processes),
@@ -102,7 +102,7 @@ def main(args):
         seq_length=args.seq_length,
         hist_length=args.hist_length,
         dim_size=args.dim_size,
-        map_size=args.map_size,
+        map_channels=args.map_channels,
         use_gmlp=args.use_gmlp,
         use_map_embed=args.use_map_embed,
         use_ckpt_wrapper=args.use_ckpt_wrapper,
@@ -115,7 +115,7 @@ def main(args):
         logger.info(f"{args.model} Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer:
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0) # eps=0.0001
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
     
     # Prepare models for training:
     model.train()
@@ -135,9 +135,12 @@ def main(args):
         for data, m in loader:
             x = data[:, :, args.hist_length:, :].to(device)
             h = data[:, :, :args.hist_length, :].to(device)
-            m = m.to(device)
+            if args.use_map_embed:
+                m = m.to(device)
+                model_kwargs = dict(h=h, m=m)
+            else:
+                model_kwargs = dict(h=h)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(h=h, m=m)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
@@ -185,13 +188,14 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_train/")
+    parser.add_argument("--map-train-dir", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_raster_train")
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-B")
     parser.add_argument("--max-num-agents", type=int, default=46) # 46 for full and 19 for veh
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
-    parser.add_argument("--map-size", type=int, default=256)
+    parser.add_argument("--map-channels", type=int, default=4)
     parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp instead of mlp')
     parser.add_argument("--use-map-embed", action='store_true', help='using map embedding conditioning')
     parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
