@@ -19,7 +19,7 @@ The repository is organised as follows:
 
 ## Folder Structure
 ``` 
-TrafficDiffuser-main
+traffic-diffuser-main
 ├── diffusion/                    # Diffusion dir
 ├── docs/asset                    # Documentation figures               
 ├── mamba/                        # Mamba model dir
@@ -36,8 +36,8 @@ TrafficDiffuser-main
 First, download and set up the repo:
 
 ```bash
-git clone https://github.com/gen-TII/TrafficDiffuser.git
-cd TrafficDiffuser
+git clone https://github.com/gen-TII/traffic-diffuser.git
+cd traffic-diffuser
 ```
 
 Then, create a python 3.10 conda env and install the requirements
