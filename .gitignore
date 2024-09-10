@@ -7,6 +7,13 @@ log.txt
 log1.txt
 main.py
 
+# Ignore model and train versions
+train2.py
+train3.py
+model_td2.py
+model_td3.py
+
+
 # Ignore preprocessing and evaluation jupyter notebooks
 preprocess_dataset.ipynb
 evaluate.ipynb

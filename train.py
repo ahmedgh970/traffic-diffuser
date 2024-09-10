@@ -6,6 +6,7 @@ from time import time
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+import torch.profiler
 
 import numpy as np
 from accelerate import Accelerator
@@ -106,14 +107,23 @@ def main(args):
         use_gmlp=args.use_gmlp,
         use_map_embed=args.use_map_embed,
         use_ckpt_wrapper=args.use_ckpt_wrapper,
-    )
+    ).to(device)
+    
+    # Log the model profile with FLOPs calculation
+    dummy_x = torch.randn(1, 46, 5, 2).to(device)
+    dummy_h = torch.randn(1, 46, 8, 2).to(device)
+    dummy_m = torch.randn(1, 4, 256, 256).to(device)
+    dummy_t = torch.randn(1).to(device)
+    with torch.profiler.profile(with_flops=True) as prof:
+        output = model(dummy_x, dummy_t, dummy_h, dummy_m)
+    if accelerator.is_main_process:
+        logger.info(prof.key_averages().table(sort_by="flops"))
     
     # Note that parameter initialization is done within the model constructor
-    model = model.to(device)
     diffusion = create_diffusion(timestep_respacing="", diffusion_steps=args.diffusion_steps)
     if accelerator.is_main_process:
         logger.info(f"{args.model} Parameters: {sum(p.numel() for p in model.parameters()):,}")
-
+    
     # Setup optimizer:
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
     

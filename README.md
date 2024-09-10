@@ -51,14 +51,14 @@ pip install -e .
 ```
 
 ## Data Processing
-First, we convert and merge the original datasets (nuscenes, waymo, etc.) into pickle files with a unified dictionary format, using ScenarioNet. Then, we used our preprocessing script to produce the data and map directories in the desired format. Specifically, we preprocess using [`process_dataset.ipynb`](process_dataset.ipynb) to produce the numpy data and PNG map (per scenario) directories. You will need to install [ScenarioNet](https://github.com/metadriverse/scenarionet).
+First, we convert and merge the original datasets (nuscenes, waymo, etc.) into pickle files with a unified dictionary format, using ScenarioNet. Then, we used our preprocessing script to produce the data and map directories in the desired format. Specifically, we preprocess using [`preprocess_dataset.ipynb`](process_dataset.ipynb) to produce the numpy data and map (per scenario) directories. You will need to install [ScenarioNet](https://github.com/metadriverse/scenarionet).
 
 ## Training
 We provide a training script for TrafficDiffuser model in [`train.py`](train.py).
 To launch TrafficDiffuser-L training with `N` GPUs on one node:
 
 ```bash
-accelerate launch --multi_gpu --num_processes N train.py --model TrafficDiffuser-L --data-path /path/to/preprocessed/scenarios/ --use-history --use-map --map-path /path/to/png/maps/
+accelerate launch --multi_gpu --num_processes N train.py --model TrafficDiffuser-L --data-path /path/to/preprocessed/scenarios/ --use-history --use-map --map-path /path/to/maps/
 ```
 
 ## Sampling

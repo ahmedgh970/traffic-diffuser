@@ -6,9 +6,9 @@ import numpy as np
 from timm.models.layers import to_2tuple
 from einops import rearrange, repeat
 
-from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-from mamba_ssm.ops.triton.layernorm import RMSNorm
-from mamba_ssm.modules.mamba_simple import Mamba
+#from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+#from mamba_ssm.ops.triton.layernorm import RMSNorm
+#from mamba_ssm.modules.mamba_simple import Mamba
 
 
 def modulate(x, shift, scale):

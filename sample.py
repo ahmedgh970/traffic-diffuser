@@ -31,13 +31,12 @@ def evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps=10, k
     valid_agent_future = interpolate_to_fixed_length(valid_agent_future, num_timesteps, kind)
     
     # Calculate metrics
-    area = calculate_polygone_area(valid_agent_future, valid_agent_gen)
-    diff_dist_travelled = calculate_diff_distance_traveled(valid_agent_future, valid_agent_gen)
-    frechet_dist = calculate_frechet_distance(valid_agent_future, valid_agent_gen)
-    ade = calculate_ade(valid_agent_future, valid_agent_gen)
-    fde = calculate_fde(valid_agent_future, valid_agent_gen)
-    
-    return area, diff_dist_travelled, frechet_dist, ade, fde
+    FD = calculate_frechet_distance(valid_agent_future, valid_agent_gen)
+    ATDD = calculate_diff_distance_traveled(valid_agent_future, valid_agent_gen)
+    PA = calculate_polygone_area(valid_agent_future, valid_agent_gen)
+    ADE = calculate_ade(valid_agent_future, valid_agent_gen)
+    FDE = calculate_fde(valid_agent_future, valid_agent_gen)
+    return FD, ATDD, PA, ADE, FDE
     
 
 def main(args):
@@ -54,7 +53,7 @@ def main(args):
         dim_size=args.dim_size,
         map_channels=args.map_channels,
         use_gmlp=args.use_gmlp,
-        use_map_embed=args.use_history_embed,
+        use_map_embed=args.use_map_embed,
         use_ckpt_wrapper=args.use_ckpt_wrapper,
     ).to(device)
     
@@ -71,8 +70,8 @@ def main(args):
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message)s')
 
     # Sample trajectories from testset:
-    average_metrics = []
-    for scenario, mp in zip(sorted(os.listdir(args.test_dir)), sorted(os.listdir(args.map_test_dir))):
+    metrics_testset = []
+    for scenario, mp in zip(sorted(os.listdir(args.test_dir))[52:], sorted(os.listdir(args.map_test_dir))[52:]):
         data = np.load(os.path.join(args.test_dir, scenario))
         data = torch.tensor(data[:args.max_num_agents, :, :], dtype=torch.float32).to(device)
         data = data.unsqueeze(0).expand(args.num_sampling, data.size(0), data.size(1), data.size(2))
@@ -104,13 +103,12 @@ def main(args):
         np.save(samples_path, samples)
         print(f'Generated samples saved in {samples_path}')
         
-        # Evaluation loop
+        # Scenario evaluation loop
         data_future = data[:, :, args.hist_length-1:, :].cpu().numpy()   # (N, L_seq_length + 1, D)
-        epsilon, num_timesteps, kind = 0.1, 10, 'linear'
-
-        # Initialize storage for all agents
-        area_agent, diff_dist_travelled_agent, frechet_dist_agent, ade_agent, fde_agent = [], [], [], [], []
+        epsilon, num_timesteps, kind = 0.1, args.seq_length*2, 'linear'
+        FD_scenario, ATDD_scenario, PA_scenario, ADE_scenario, FDE_scenario  = [], [], [], [], []
         
+        # Evaluate each agent's trajectories
         for ag in range(samples.shape[1]):
             metrics = []
             for sample_idx in range(samples.shape[0]):
@@ -118,47 +116,46 @@ def main(args):
                 agent_future = data_future[sample_idx, ag, :, :]
                 agent_gen = samples[sample_idx, ag, :, :]
                 agent_gen = np.concatenate((agent_future[0:1, :], agent_gen), axis=0)
-                
                 # Filter out points that are too close to (0,0)
                 valid_agent_gen = agent_gen[(np.abs(agent_gen[:, 0]) > epsilon) & (np.abs(agent_gen[:, 1]) > epsilon)]
                 valid_agent_future = agent_future[(agent_future[:, 0] != 0.0) & (agent_future[:, 1] != 0.0)]
                 
-                if valid_agent_gen.shape[0] != 0 or valid_agent_future.shape[0] != 0:
-                    # Evaluate each agent's trajectory
+                # Evaluate each agent's sampled trajectory
+                if valid_agent_gen.shape[0] > 1 and valid_agent_future.shape[0] > 1:
                     metrics.append(evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps, kind))
             
             if metrics != []:
-                # Unpack metrics
-                area, diff_dist_travelled, frechet_dist, ade, fde = zip(*metrics)
-            
-                # Store the averaged metrics
-                area_agent.append(mean(area))
-                diff_dist_travelled_agent.append(mean(diff_dist_travelled))
-                frechet_dist_agent.append(mean(frechet_dist))
-                ade_agent.append(mean(ade))
-                fde_agent.append(mean(fde))
+                # Unpack metrics and store the average
+                FD, ATDD, PA, ADE, FDE = zip(*metrics)               
+                FD_scenario.append(mean(FD))
+                ATDD_scenario.append(mean(ATDD))
+                PA_scenario.append(mean(PA))
+                ADE_scenario.append(mean(ADE))
+                FDE_scenario.append(mean(FDE))
         
         # Logging the results
-        logging.info(f"This evaluation is conducted for scenario {scenario} and involves averaging across all samples and agents:")
-        logging.info(f" - Polygone Area (PA): {mean(area_agent)}")
-        logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(diff_dist_travelled_agent)}")
-        logging.info(f" - Frechet Distance (FD): {mean(frechet_dist_agent)}")
-        logging.info(f" - Average Displacement Error (ADE): {mean(ade_agent)}")
-        logging.info(f" - Final Displacement Error (FDE): {mean(fde_agent)} \n")
+        if FD_scenario == []:
+            logging.info(f"This evaluation is conducted for scenario {scenario} and all the agent's sampled trajectories are NOT VALID agent's !")
+        else:
+            logging.info(f"This evaluation is conducted for scenario {scenario} and involves averaging across all samples and agents:")
+            logging.info(f" - Frechet Distance (FD): {mean(FD_scenario)}")
+            logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD_scenario)}")
+            logging.info(f" - Polygone Area (PA): {mean(PA_scenario)}")
+            logging.info(f" - Average Displacement Error (ADE): {mean(ADE_scenario)}")
+            logging.info(f" - Final Displacement Error (FDE): {mean(FDE_scenario)} \n")
 
-        print(f"Logs have been saved to {log_filename}")
-        
-        average_metrics.append((mean(area_agent), mean(diff_dist_travelled_agent), mean(frechet_dist_agent), mean(ade_agent), mean(fde_agent)))
+            print(f"Logs have been saved to {log_filename}")
+            
+            metrics_testset.append((mean(FD_scenario), mean(ATDD_scenario), mean(PA_scenario), mean(ADE_scenario), mean(FDE_scenario)))
     
-    dataset_area, dataset_diff_dist_travelled, dataset_frechet_dist, dataset_ade, dataset_fde = zip(*average_metrics)
-    
-    # Logging the results
+    # Logging the average result on the full testset
+    FD, ATDD, PA, ADE, FDE = zip(*metrics_testset)
     logging.info(f"The average evaluation results across all scenarios:")
-    logging.info(f" - Polygone Area (PA): {mean(dataset_area)}")
-    logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(dataset_diff_dist_travelled)}")
-    logging.info(f" - Frechet Distance (FD): {mean(dataset_frechet_dist)}")
-    logging.info(f" - Average Displacement Error (ADE): {mean(dataset_ade)}")
-    logging.info(f" - Final Displacement Error (FDE): {mean(dataset_fde)} \n")
+    logging.info(f" - Frechet Distance (FD): {mean(FD)}")
+    logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD)}")
+    logging.info(f" - Polygone Area (PA): {mean(PA)}")
+    logging.info(f" - Average Displacement Error (ADE): {mean(ADE)}")
+    logging.info(f" - Final Displacement Error (FDE): {mean(FDE)} \n")
 
 
 # To sample from the EMA weights of a custom TrafficDiffuser-L model, run:
@@ -177,7 +174,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp in place of mlp')
     parser.add_argument("--use-map-embed", action='store_true', help='using history embedding conditioning')
     parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
-    parser.add_argument("--num-sampling", type=int, default=10)
+    parser.add_argument("--num-sampling", type=int, default=100)
     parser.add_argument("--num-sampling-steps", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ckpt", type=str, default=None)
