@@ -30,6 +30,7 @@ def create_logger(logging_dir):
         handlers=[logging.StreamHandler(), logging.FileHandler(f"{logging_dir}/log.txt")]
     )
     logger = logging.getLogger(__name__)
+    
     return logger
 
 
@@ -37,9 +38,10 @@ def create_logger(logging_dir):
 #                                Dataloader                                     #
 #################################################################################
 class CustomDataset(Dataset):
-    def __init__(self, data_path, max_agent, map_path):
+    def __init__(self, data_path, max_agent, dim_size, map_path):
         self.data_path = data_path
         self.max_agent = max_agent
+        self.dim_size = dim_size
         self.map_path = map_path
         self.data_files = sorted(os.listdir(data_path))
         self.map_files = sorted(os.listdir(map_path))
@@ -50,7 +52,8 @@ class CustomDataset(Dataset):
     def __getitem__(self, idx):      
         data_file = self.data_files[idx]
         data_npy = np.load(os.path.join(self.data_path, data_file))
-        data_tensor = torch.tensor(data_npy[:self.max_agent, :, :], dtype=torch.float32)
+        # crop to max num agents and dim size
+        data_tensor = torch.tensor(data_npy[:self.max_agent, :, :self.dim_size], dtype=torch.float32)
         
         map_file = self.map_files[idx]
         map_npy = np.load(os.path.join(self.map_path, map_file))
@@ -85,7 +88,7 @@ def main(args):
     
     # Setup Dataloader
     # The dataloader will return a batch of tensor x of shape (B, L, D)
-    dataset = CustomDataset(data_path=args.train_dir, max_agent=args.max_num_agents, map_path=args.map_train_dir,)
+    dataset = CustomDataset(data_path=args.train_dir, max_agent=args.max_num_agents, dim_size=args.dim_size, map_path=args.map_train_dir,)
     loader = DataLoader(
         dataset,
         batch_size=int(args.global_batch_size // accelerator.num_processes),
@@ -110,9 +113,9 @@ def main(args):
     ).to(device)
     
     # Log the model profile with FLOPs calculation
-    dummy_x = torch.randn(1, 46, 5, 2).to(device)
-    dummy_h = torch.randn(1, 46, 8, 2).to(device)
-    dummy_m = torch.randn(1, 4, 256, 256).to(device)
+    dummy_x = torch.randn(1, args.max_num_agents, args.seq_length, args.dim_size).to(device)
+    dummy_h = torch.randn(1, args.max_num_agents, args.hist_length, args.dim_size).to(device)
+    dummy_m = torch.randn(1, args.map_channels, args.map_size, args.map_size).to(device)
     dummy_t = torch.randn(1).to(device)
     with torch.profiler.profile(with_flops=True) as prof:
         output = model(dummy_x, dummy_t, dummy_h, dummy_m)
@@ -205,6 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
+    parser.add_argument("--map-size", type=int, default=256)
     parser.add_argument("--map-channels", type=int, default=4)
     parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp instead of mlp')
     parser.add_argument("--use-map-embed", action='store_true', help='using map embedding conditioning')

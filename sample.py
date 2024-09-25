@@ -11,9 +11,6 @@ from diffusion import create_diffusion
 from models.model_td import TrafficDiffuser_models
 from metrics import *
 
-#torch.manual_seed(1234)
-
-
 
 # Function to create a unique log file name
 def create_log_file(log_dir='logs'):
@@ -71,9 +68,9 @@ def main(args):
 
     # Sample trajectories from testset:
     metrics_testset = []
-    for scenario, mp in zip(sorted(os.listdir(args.test_dir))[52:], sorted(os.listdir(args.map_test_dir))[52:]):
+    for scenario, mp in zip(sorted(os.listdir(args.test_dir)), sorted(os.listdir(args.map_test_dir))):
         data = np.load(os.path.join(args.test_dir, scenario))
-        data = torch.tensor(data[:args.max_num_agents, :, :], dtype=torch.float32).to(device)
+        data = torch.tensor(data[:args.max_num_agents, :, :args.dim_size], dtype=torch.float32).to(device)
         data = data.unsqueeze(0).expand(args.num_sampling, data.size(0), data.size(1), data.size(2))
         h = data[:, :, :args.hist_length, :]        
         if args.use_map_embed:

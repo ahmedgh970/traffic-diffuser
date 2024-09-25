@@ -64,14 +64,14 @@ class MapEmbedder(nn.Module):
         
         # Final projection and normalization 
         self.proj_final = nn.Linear(512, hidden_size, bias=True)
-        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm_final = nn.LayerNorm(512, elementwise_affine=False, eps=1e-6)
         
     def forward(self, x):
         # (B, C, H, W)
         x = self.resnet(x)              # (B, 512, 1, 1)
         x = x.flatten(1)                # (B, 512)
+        x = self.norm_final(x)          # (B, 512)
         x = self.proj_final(x)          # (B, hidden_size)
-        x = self.norm_final(x)          # (B, hidden_size)
         return x
 
 

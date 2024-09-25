@@ -24,12 +24,19 @@
 - [x] Preprocess the map features
 - [x] Rename the raster map files to be the same as trainval_clean train /test 
 - [x] Implement a CNN map_embedder on rasterized maps
-- [ ] Report results with all metrics
+- [x] Report results with all metrics
+- [x] Optimize the map encoder arch
+- [x] Report results for all configs
+- [ ] Add celerity to dim
+- [ ] Avoid collision and modify the celerity  
 
 ## Bugs
 - [x] Fix bugs related to the `HistoryEmbedder`
 
 ## Enhancements
+- [ ] Add agent attention
+- [ ] Download and preprocess Waymo and Argoverse 2.0
+- [ ] Train and test on a merged dataset
 
 ## Conclusions
 - [Yes] Does conditioning on the final layer enhance generation?
@@ -46,4 +53,4 @@
 - [No] Does using the second type of masking (mask at the beginning and end, with mask from `h` referring to padded agents) improve results?
 - [No] Should we apply the mask?
 - [No] Does agent attention enhance trajectory generation with respect to each agent?
-- [ ] Does map conditioning enhance trajectory generation?
+- [Yes] Does map conditioning enhance trajectory generation?
