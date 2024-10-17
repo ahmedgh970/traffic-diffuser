@@ -49,28 +49,29 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
-
 class MapEmbedder(nn.Module):
     """
-    Map encoding as context to condition the TrafficDiffuser.
+    Map encoding using EfficientNet-B0 as context to condition the TrafficDiffuser.
     """ 
     def __init__(self, map_channels, hidden_size):
         super().__init__()      
-        # Load pretrained ResNet, modify the first convolutional layer to accept 4-channel input,
-        # and remove the final fully connected layer
-        self.resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-        self.resnet.conv1 = nn.Conv2d(map_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+        # Load pretrained EfficientNet-B0
+        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        # Modify the first convolution layer to accept 4-channel input
+        self.efficientnet.features[0][0] = nn.Conv2d(map_channels, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        # Remove the final fully connected layer
+        self.efficientnet = nn.Sequential(*list(self.efficientnet.children())[:-2])
         
-        # Final projection and normalization 
-        self.proj_final = nn.Linear(512, hidden_size, bias=True)
-        self.norm_final = nn.LayerNorm(512, elementwise_affine=False, eps=1e-6)
-        
+        # Final projection and normalization
+        self.norm_final = nn.LayerNorm(1280, elementwise_affine=False, eps=1e-6)
+        self.proj_final = nn.Linear(1280, hidden_size, bias=True)
+
     def forward(self, x):
         # (B, C, H, W)
-        x = self.resnet(x)              # (B, 512, 1, 1)
-        x = x.flatten(1)                # (B, 512)
-        x = self.norm_final(x)          # (B, 512)
+        x = self.efficientnet(x)        # (B, 1280, H, W)
+        #x = x.flatten(1)                # (B, 1280)
+        x = x.mean(dim=[2, 3])          # Global average pooling (B, 1280)
+        x = self.norm_final(x)          # (B, 1280)
         x = self.proj_final(x)          # (B, hidden_size)
         return x
 
@@ -102,7 +103,6 @@ class FinalLayer(nn.Module):
         x = self.linear(x)                                                      # (B*N, L, D)
         x = x.reshape(-1, self.max_num_agents, self.seq_length, self.dim_size)  # (B, N, L, D)
         return x
-    
     
 class TrafficDiffuser(nn.Module):
     """
@@ -225,9 +225,6 @@ class TrafficDiffuser(nn.Module):
 #                          TrafficDiffuser Configs                              #
 #################################################################################
 
-def TrafficDiffuser_H(**kwargs):
-    return TrafficDiffuser(hidden_size=768, num_heads=16, depth=28, **kwargs)
-
 def TrafficDiffuser_L(**kwargs):
     return TrafficDiffuser(hidden_size=512, num_heads=16, depth=24, **kwargs)
 
@@ -238,7 +235,6 @@ def TrafficDiffuser_S(**kwargs):
     return TrafficDiffuser(hidden_size=128, num_heads=8, depth=16, **kwargs)
 
 TrafficDiffuser_models = {
-    'TrafficDiffuser-H': TrafficDiffuser_H,
     'TrafficDiffuser-L': TrafficDiffuser_L,
     'TrafficDiffuser-B': TrafficDiffuser_B,
     'TrafficDiffuser-S': TrafficDiffuser_S,

@@ -5,13 +5,18 @@ __pycache__/
 # Ignore screen log.txt and main.y files
 log.txt
 log1.txt
-main.py
+main_sample1.py
+main_sample2.py
+main_train.py
 
 # Ignore model and train versions
+train1.py
 train2.py
 train3.py
-model_td2.py
-model_td3.py
+model_td_.py
+model_td_1.py
+model_td_2.py
+model_td_3.py
 
 
 # Ignore preprocessing and evaluation jupyter notebooks
@@ -19,6 +24,7 @@ preprocess_dataset.ipynb
 evaluate.ipynb
 
 # Ignore results and other directories
+results0/*
 results/*
 copy/*
 data/*

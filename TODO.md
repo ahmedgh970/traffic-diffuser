@@ -29,14 +29,13 @@
 - [x] Report results for all configs
 - [ ] Add celerity to dim
 - [ ] Avoid collision and modify the celerity  
+- [ ] Download and preprocess Waymo and Argoverse 2.0
+- [ ] Train and test on a merged dataset
 
 ## Bugs
 - [x] Fix bugs related to the `HistoryEmbedder`
 
 ## Enhancements
-- [ ] Add agent attention
-- [ ] Download and preprocess Waymo and Argoverse 2.0
-- [ ] Train and test on a merged dataset
 
 ## Conclusions
 - [Yes] Does conditioning on the final layer enhance generation?

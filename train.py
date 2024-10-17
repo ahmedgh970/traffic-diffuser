@@ -3,21 +3,22 @@ import argparse
 import logging
 from glob import glob
 from time import time
+import importlib
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as T
 import torch.profiler
 
 import numpy as np
 from accelerate import Accelerator
 
-from models.model_td import TrafficDiffuser_models
 from diffusion import create_diffusion
 
 
 
 #################################################################################
-#                             Training Helper Functions                         #
+#                             Helper Functions                                  #
 #################################################################################
 def create_logger(logging_dir):
     """
@@ -33,18 +34,28 @@ def create_logger(logging_dir):
     
     return logger
 
+def load_model(module_name):
+    """
+    Dynamically load the model class from the specified module.
+    """
+    module = importlib.import_module(f"models.{module_name}")
+    model_class = getattr(module, 'TrafficDiffuser_models')
+    return model_class
+
 
 #################################################################################
 #                                Dataloader                                     #
 #################################################################################
 class CustomDataset(Dataset):
-    def __init__(self, data_path, max_agent, dim_size, map_path):
+    def __init__(self, data_path, max_agent, dim_size, map_path, map_size):
         self.data_path = data_path
         self.max_agent = max_agent
         self.dim_size = dim_size
         self.map_path = map_path
+        self.map_size = map_size
         self.data_files = sorted(os.listdir(data_path))
         self.map_files = sorted(os.listdir(map_path))
+        self.map_transform = T.Resize(self.map_size)
 
     def __len__(self):
         return len(self.data_files)
@@ -58,7 +69,7 @@ class CustomDataset(Dataset):
         map_file = self.map_files[idx]
         map_npy = np.load(os.path.join(self.map_path, map_file))
         map_tensor = torch.tensor(map_npy, dtype=torch.float32)
-        
+        map_tensor = self.map_transform(map_tensor)
         return data_tensor, map_tensor
 
 
@@ -88,7 +99,7 @@ def main(args):
     
     # Setup Dataloader
     # The dataloader will return a batch of tensor x of shape (B, L, D)
-    dataset = CustomDataset(data_path=args.train_dir, max_agent=args.max_num_agents, dim_size=args.dim_size, map_path=args.map_train_dir,)
+    dataset = CustomDataset(data_path=args.train_dir, max_agent=args.max_num_agents, dim_size=args.dim_size, map_path=args.map_train_dir, map_size=args.map_size)
     loader = DataLoader(
         dataset,
         batch_size=int(args.global_batch_size // accelerator.num_processes),
@@ -101,7 +112,8 @@ def main(args):
         logger.info(f"Dataset contains {len(dataset):,} scenarios ({args.train_dir})")
         
     # Create model:
-    model = TrafficDiffuser_models[args.model](
+    model_class = load_model(args.model_module)
+    model = model_class[args.model](
         max_num_agents = args.max_num_agents,
         seq_length=args.seq_length,
         hist_length=args.hist_length,
@@ -111,6 +123,10 @@ def main(args):
         use_map_embed=args.use_map_embed,
         use_ckpt_wrapper=args.use_ckpt_wrapper,
     ).to(device)
+    
+    # Model summary:
+    if accelerator.is_main_process:
+        logger.info(print(model))
     
     # Log the model profile with FLOPs calculation
     dummy_x = torch.randn(1, args.max_num_agents, args.seq_length, args.dim_size).to(device)
@@ -195,15 +211,17 @@ def main(args):
         logger.info("Done!")
 
 
-# To launch TrafficDiffuser-S training with multiple GPUs on one node:
-# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 train.py --model TrafficDiffuser-B --max-num-agents 46 --hist-length 8 --seq-length 5 --use-map-embed --use-ckpt-wrapper
+# To launch TrafficDiffuser-S training with one or multiple GPUs on one node:
+# accelerate launch train.py --model TrafficDiffuser-S --max-num-agents 46 --hist-length 8 --seq-length 5 --use-map-embed --use-ckpt-wrapper
+# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 train.py --model TrafficDiffuser-S --max-num-agents 46 --hist-length 8 --seq-length 5 --use-map-embed --use-ckpt-wrapper
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_train/")
     parser.add_argument("--map-train-dir", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_raster_train")
     parser.add_argument("--results-dir", type=str, default="results")
-    parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-B")
+    parser.add_argument("--model-module", type=str, default="model_td")
+    parser.add_argument("--model", type=str, default="TrafficDiffuser-S", help='choose from TrafficDiffuser-{S, B, L}')
     parser.add_argument("--max-num-agents", type=int, default=46) # 46 for full and 19 for veh
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)

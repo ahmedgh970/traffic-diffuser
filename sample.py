@@ -4,21 +4,35 @@ import numpy as np
 from statistics import mean
 import logging
 from datetime import datetime
+import importlib
 
 import torch
+import torchvision.transforms as T
 
 from diffusion import create_diffusion
-from models.model_td import TrafficDiffuser_models
 from metrics import *
 
 
-# Function to create a unique log file name
+#################################################################################
+#                             Helper Functions                                  #
+#################################################################################
 def create_log_file(log_dir='logs'):
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     log_filename = f"{log_dir}/evaluation_{timestamp}.log"
     return log_filename
 
+def load_model(module_name):
+    """
+    Dynamically load the model class from the specified module.
+    """
+    module = importlib.import_module(f"models.{module_name}")
+    model_class = getattr(module, 'TrafficDiffuser_models')
+    return model_class
 
+
+#################################################################################
+#                        Evaluate Trajectory Function                           #
+#################################################################################
 def evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps=10, kind='linear'):
     """
     Evaluate a single agent's generated trajectory against the future ground truth.
@@ -36,14 +50,19 @@ def evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps=10, k
     return FD, ATDD, PA, ADE, FDE
     
 
+
+#################################################################################
+#                       Sampling and Evaluation Loop                            #
+#################################################################################
 def main(args):
     # Setup PyTorch:
     torch.manual_seed(args.seed)
     torch.set_grad_enabled(False)
     device = "cuda:1" if torch.cuda.is_available() else "cpu"
-
-    # Load model:
-    model = TrafficDiffuser_models[args.model](
+    
+    # Initialize the model:
+    model_class = load_model(args.model_module)
+    model = model_class[args.model](
         max_num_agents = args.max_num_agents,
         seq_length=args.seq_length,
         hist_length=args.hist_length,
@@ -57,6 +76,7 @@ def main(args):
     # Load a TrafficDiffuser checkpoint:
     state_dict = torch.load(args.ckpt, map_location=lambda storage, loc: storage)
     model.load_state_dict(state_dict["model"])
+    print(model)
     model.eval()  # important!
     
     # Create diffusion with the desired number of sampling steps 
@@ -76,6 +96,7 @@ def main(args):
         if args.use_map_embed:
             m = np.load(os.path.join(args.map_test_dir, mp))
             m = torch.tensor(m, dtype=torch.float32).to(device)
+            m = T.Resize(args.map_size)(m)
             m = m.unsqueeze(0).expand(args.num_sampling, m.size(0), m.size(1), m.size(2))
             model_kwargs = dict(h=h, m=m)
         else:
@@ -155,20 +176,22 @@ def main(args):
     logging.info(f" - Final Displacement Error (FDE): {mean(FDE)} \n")
 
 
-# To sample from the EMA weights of a custom TrafficDiffuser-L model, run:
-# python sample.py --use-map-embed --use-ckpt-wrapper --ckpt /data/ahmed.ghorbel/workdir/autod/TrafficDiffuser/results/006-TrafficDiffuser-B/checkpoints/0084000.pt
+# To sample from a custom TrafficDiffuser-S model, run:
+# python sample.py --use-map-embed --ckpt /data/ahmed.ghorbel/workdir/autod/TrafficDiffuser/results/000-TrafficDiffuser-S/checkpoints/0084000.pt
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_test")  # 149 scenarios and 19 ag
     parser.add_argument("--map-test-dir", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_raster_test")
-    parser.add_argument("--model", type=str, choices=list(TrafficDiffuser_models.keys()), default="TrafficDiffuser-B")
+    parser.add_argument("--model-module", type=str, default="model_td")
+    parser.add_argument("--model", type=str, default="TrafficDiffuser-S", help='choose from TrafficDiffuser-{S, B, L}')
     parser.add_argument("--max-num-agents", type=int, default=46)
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
+    parser.add_argument("--map-size", type=int, default=256)
     parser.add_argument("--map-channels", type=int, default=4)
-    parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp in place of mlp')
+    parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp instead of mlp')
     parser.add_argument("--use-map-embed", action='store_true', help='using history embedding conditioning')
     parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
     parser.add_argument("--num-sampling", type=int, default=100)
