@@ -68,8 +68,7 @@ class MapEmbedder(nn.Module):
 
     def forward(self, x):
         # (B, C, H, W)
-        x = self.efficientnet(x)        # (B, 1280, H, W)
-        #x = x.flatten(1)                # (B, 1280)
+        x = self.efficientnet(x)        # (B, 1280, 7, 7)
         x = x.mean(dim=[2, 3])          # Global average pooling (B, 1280)
         x = self.norm_final(x)          # (B, 1280)
         x = self.proj_final(x)          # (B, hidden_size)

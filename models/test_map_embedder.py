@@ -3,6 +3,7 @@ import torch.nn as nn
 import timm
 import torchvision.models as models
 import time
+from fvcore.nn import FlopCountAnalysis
 
 
 class MapEmbedderSwinTiny(nn.Module):
@@ -83,7 +84,7 @@ class MapEmbedderEfficientNetB0(nn.Module):
 
     def forward(self, x):
         # (B, C, H, W)
-        x = self.efficientnet(x)        # (B, 1280, H, W)
+        x = self.efficientnet(x)        # (B, 1280, 7, 7)
         x = x.mean(dim=[2, 3])          # Global average pooling (B, 1280)
         x = self.norm_final(x)          # (B, 1280)
         x = self.proj_final(x)          # (B, hidden_size)
@@ -111,21 +112,26 @@ def test_inference_time(model, device, input_tensor, num_trials=100):
     return avg_inference_time
 
 
+# Function to calculate FLOPs using fvcore
+def print_flops(model, input_tensor):
+    flops = FlopCountAnalysis(model, input_tensor)
+    print(f"FLOPs: {flops.total()}")
+
 # Test setup
 map_channels = 4
-hidden_size = 384
-batch_size = 100
+hidden_size = 128
+batch_size = 16
 height = 224
 width = 224
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Create random torch tensor for map input
-random_map_tensor = torch.randn(batch_size, map_channels, height, width)
+random_map_tensor = torch.randn(batch_size, map_channels, height, width).to(device)
 
 # Initialize the models
-model_swin = MapEmbedderSwinTiny(map_channels, hidden_size)
-model_convnext = MapEmbedderConvNeXtTiny(map_channels, hidden_size)
-model_efficientnet = MapEmbedderEfficientNetB0(map_channels, hidden_size)
+model_swin = MapEmbedderSwinTiny(map_channels, hidden_size).to(device)
+model_convnext = MapEmbedderConvNeXtTiny(map_channels, hidden_size).to(device)
+model_efficientnet = MapEmbedderEfficientNetB0(map_channels, hidden_size).to(device)
 
 # Print the number of parameters
 print(f"Swin Transformer Tiny number of parameters: {sum(p.numel() for p in model_swin.parameters() if p.requires_grad)}")
@@ -141,3 +147,11 @@ efficientnet_time = test_inference_time(model_efficientnet, device, random_map_t
 print(f"Average inference time for Swin Transformer Tiny: {swin_time:.6f} seconds")
 print(f"Average inference time for ConvNeXt-Tiny: {convnext_time:.6f} seconds")
 print(f"Average inference time for EfficientNet-B0: {efficientnet_time:.6f} seconds")
+
+# Print FLOPs
+print("Swin Transformer Tiny FLOPs:")
+print_flops(model_swin, random_map_tensor)
+print("ConvNeXt-Tiny FLOPs:")
+print_flops(model_convnext, random_map_tensor)
+print("EfficientNet-B0 FLOPs:")
+print_flops(model_efficientnet, random_map_tensor)

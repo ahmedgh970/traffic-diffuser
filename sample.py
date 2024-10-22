@@ -1,10 +1,12 @@
 import os
+import time
 import argparse
 import numpy as np
 from statistics import mean
 import logging
 from datetime import datetime
 import importlib
+from fvcore.nn import FlopCountAnalysis
 
 import torch
 import torchvision.transforms as T
@@ -28,8 +30,8 @@ def load_model(module_name):
     module = importlib.import_module(f"models.{module_name}")
     model_class = getattr(module, 'TrafficDiffuser_models')
     return model_class
-
-
+    
+    
 #################################################################################
 #                        Evaluate Trajectory Function                           #
 #################################################################################
@@ -58,7 +60,7 @@ def main(args):
     # Setup PyTorch:
     torch.manual_seed(args.seed)
     torch.set_grad_enabled(False)
-    device = "cuda:1" if torch.cuda.is_available() else "cpu"
+    device = f"cuda:{args.cuda_device}" if torch.cuda.is_available() else "cpu"
     
     # Initialize the model:
     model_class = load_model(args.model_module)
@@ -70,13 +72,12 @@ def main(args):
         map_channels=args.map_channels,
         use_gmlp=args.use_gmlp,
         use_map_embed=args.use_map_embed,
-        use_ckpt_wrapper=args.use_ckpt_wrapper,
+        use_ckpt_wrapper=False,
     ).to(device)
     
     # Load a TrafficDiffuser checkpoint:
     state_dict = torch.load(args.ckpt, map_location=lambda storage, loc: storage)
     model.load_state_dict(state_dict["model"])
-    print(model)
     model.eval()  # important!
     
     # Create diffusion with the desired number of sampling steps 
@@ -85,7 +86,40 @@ def main(args):
     # Set up logging to file
     log_filename = create_log_file(log_dir=os.path.dirname(os.path.dirname(args.ckpt)))
     logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message)s')
-
+    
+    # Print model parameters, and summary
+    logging.info(f"{args.model} Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    logging.info(f"{args.model} Model summary:\n{model}")
+    
+    # Print model flops
+    batch_size = 1 # to ensure flops and inference time are calculated for a single scenario
+    dummy_x = torch.randn(batch_size, args.max_num_agents, args.seq_length, args.dim_size, device=device)
+    dummy_t = torch.randn(batch_size, device=device)
+    dummy_h = torch.randn(batch_size, args.max_num_agents, args.hist_length, args.dim_size, device=device)
+    if args.use_map_embed:
+        dummy_m = torch.randn(batch_size, args.map_channels, args.map_size, args.map_size, device=device)
+    else:
+        dummy_m = None
+    flops = FlopCountAnalysis(model, (dummy_x, dummy_t, dummy_h, dummy_m))
+    gflops = flops.total() / 1e9
+    logging.info(f"{args.model} GFLOPs: {gflops:.4f}")
+    
+    # Print model sampling time
+    model_kwargs = dict(h=dummy_h, m=dummy_m)
+    num_trials = 10
+    avg_sampling_time = 0
+    for _ in range(num_trials):
+        torch.cuda.synchronize()
+        tic = time.time()
+        samples = diffusion.p_sample_loop(
+                model.forward, dummy_x.shape, dummy_x, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+        )
+        torch.cuda.synchronize()
+        toc = time.time()
+        avg_sampling_time += (toc - tic)
+    avg_sampling_time /= num_trials
+    logging.info(f"{args.model} Sampling time: {avg_sampling_time:.2f} s")
+        
     # Sample trajectories from testset:
     metrics_testset = []
     for scenario, mp in zip(sorted(os.listdir(args.test_dir)), sorted(os.listdir(args.map_test_dir))):
@@ -104,7 +138,7 @@ def main(args):
         
         # Create sampling noise:
         x = torch.randn(args.num_sampling, args.max_num_agents, args.seq_length, args.dim_size, device=device)
-
+        
         # Sample trajectories:
         samples = diffusion.p_sample_loop(
             model.forward, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
@@ -177,7 +211,8 @@ def main(args):
 
 
 # To sample from a custom TrafficDiffuser-S model, run:
-# python sample.py --use-map-embed --ckpt /data/ahmed.ghorbel/workdir/autod/TrafficDiffuser/results/000-TrafficDiffuser-S/checkpoints/0084000.pt
+# python sample.py --cuda-device 0 --model-module model_td --model TrafficDiffuser-S \
+    # --use-gmlp --use-map-embed --ckpt /data/ahmed.ghorbel/workdir/autod/TrafficDiffuser/results/000-TrafficDiffuser-S/checkpoints/0084000.pt
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -193,9 +228,9 @@ if __name__ == "__main__":
     parser.add_argument("--map-channels", type=int, default=4)
     parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp instead of mlp')
     parser.add_argument("--use-map-embed", action='store_true', help='using history embedding conditioning')
-    parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
     parser.add_argument("--num-sampling", type=int, default=100)
     parser.add_argument("--num-sampling-steps", type=int, default=1000)
+    parser.add_argument("--cuda-device", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ckpt", type=str, default=None)
     args = parser.parse_args()

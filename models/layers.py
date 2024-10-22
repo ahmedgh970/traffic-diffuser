@@ -12,8 +12,9 @@ from einops import rearrange, repeat
 
 
 def modulate(x, shift, scale):
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
-
+    # x: (B, N, H), shift: (B, H), scale: (B, H)
+    # Broadcasted addition and multiplication
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)   # (B, N, H) 
 
 
 class AdaDiMT(nn.Module):

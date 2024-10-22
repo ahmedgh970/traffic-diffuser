@@ -1,3 +1,7 @@
+# Ignore 
+.gitignore
+TODO.md
+
 # Ignore Python cache files
 __pycache__/
 *.pyc
@@ -8,23 +12,17 @@ log1.txt
 main_sample1.py
 main_sample2.py
 main_train.py
-
-# Ignore model and train versions
-train1.py
-train2.py
-train3.py
-model_td_.py
-model_td_1.py
-model_td_2.py
-model_td_3.py
+main.py
 
 
-# Ignore preprocessing and evaluation jupyter notebooks
-preprocess_dataset.ipynb
+# Ignore evaluate jupyter notebook
 evaluate.ipynb
 
 # Ignore results and other directories
-results0/*
-results/*
-copy/*
-data/*
+results0
+results
+backup
+data
+mamba
+metadrive
+scenarionet

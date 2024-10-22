@@ -8,7 +8,6 @@ import importlib
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
-import torch.profiler
 
 import numpy as np
 from accelerate import Accelerator
@@ -126,20 +125,10 @@ def main(args):
     
     # Model summary:
     if accelerator.is_main_process:
-        logger.info(print(model))
-    
-    # Log the model profile with FLOPs calculation
-    dummy_x = torch.randn(1, args.max_num_agents, args.seq_length, args.dim_size).to(device)
-    dummy_h = torch.randn(1, args.max_num_agents, args.hist_length, args.dim_size).to(device)
-    dummy_m = torch.randn(1, args.map_channels, args.map_size, args.map_size).to(device)
-    dummy_t = torch.randn(1).to(device)
-    with torch.profiler.profile(with_flops=True) as prof:
-        output = model(dummy_x, dummy_t, dummy_h, dummy_m)
-    if accelerator.is_main_process:
-        logger.info(prof.key_averages().table(sort_by="flops"))
+        logger.info(f"Model summary:\n{model}")
     
     # Note that parameter initialization is done within the model constructor
-    diffusion = create_diffusion(timestep_respacing="", diffusion_steps=args.diffusion_steps)
+    diffusion = create_diffusion(timestep_respacing="", noise_schedule="linear", diffusion_steps=args.diffusion_steps)
     if accelerator.is_main_process:
         logger.info(f"{args.model} Parameters: {sum(p.numel() for p in model.parameters()):,}")
     

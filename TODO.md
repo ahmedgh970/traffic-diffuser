@@ -27,15 +27,19 @@
 - [x] Report results with all metrics
 - [x] Optimize the map encoder arch
 - [x] Report results for all configs
-- [ ] Add celerity to dim
-- [ ] Avoid collision and modify the celerity  
-- [ ] Download and preprocess Waymo and Argoverse 2.0
-- [ ] Train and test on a merged dataset
+- [x] Run main to define best map embedder
+- [ ] Run main_train to have last eperiments with the best map embedder
+- [ ] Run main_sample1 on and main_sample2 in two screens to sample the last experiments
+
 
 ## Bugs
 - [x] Fix bugs related to the `HistoryEmbedder`
 
 ## Enhancements
+- [ ] Add celerity to dim
+- [ ] Avoid collision and modify the celerity  
+- [ ] Download and preprocess Waymo and Argoverse 2.0
+- [ ] Train and test on a merged dataset
 
 ## Conclusions
 - [Yes] Does conditioning on the final layer enhance generation?
@@ -52,4 +56,4 @@
 - [No] Does using the second type of masking (mask at the beginning and end, with mask from `h` referring to padded agents) improve results?
 - [No] Should we apply the mask?
 - [No] Does agent attention enhance trajectory generation with respect to each agent?
-- [Yes] Does map conditioning enhance trajectory generation?
+- [Yes] Does map conditioning enhance trajectory generation? but we still encounter off-road generation
