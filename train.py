@@ -59,11 +59,26 @@ class CustomDataset(Dataset):
     def __len__(self):
         return len(self.data_files)
 
+    def pad_or_crop_agents(self, data_npy):
+        # Crop to the desired dim_size
+        data_tensor = torch.tensor(data_npy[:, :, :self.dim_size], dtype=torch.float32)
+        num_agents = data_tensor.shape[0]
+        
+        # Crop or pad to the desired max_agent
+        if num_agents >= self.max_agent:
+            return data_tensor[:self.max_agent]
+        else:
+            # If fewer agents, pad with zeros using torch.cat for efficiency
+            padding = torch.zeros((self.max_agent - num_agents, data_tensor.shape[1], data_tensor.shape[2]), dtype=torch.float32)
+            return torch.cat((data_tensor, padding), dim=0)
+
     def __getitem__(self, idx):      
         data_file = self.data_files[idx]
         data_npy = np.load(os.path.join(self.data_path, data_file))
+        
         # crop to max num agents and dim size
-        data_tensor = torch.tensor(data_npy[:self.max_agent, :, :self.dim_size], dtype=torch.float32)
+        #data_tensor = torch.tensor(data_npy[:self.max_agent, :, :self.dim_size], dtype=torch.float32)
+        data_tensor = self.pad_or_crop_agents(data_npy)
         
         map_file = self.map_files[idx]
         map_npy = np.load(os.path.join(self.map_path, map_file))
@@ -206,8 +221,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_train/")
-    parser.add_argument("--map-train-dir", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_raster_train")
+    parser.add_argument("--train-dir", type=str, default="/data/tii/data/nuscenes/nuscenes_trainval_clean_train/")
+    parser.add_argument("--map-train-dir", type=str, default="/data/tii/data/nuscenes/nuscenes_maps/nuscenes_trainval_raster_train")
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model-module", type=str, default="model_td")
     parser.add_argument("--model", type=str, default="TrafficDiffuser-S", help='choose from TrafficDiffuser-{S, B, L}')

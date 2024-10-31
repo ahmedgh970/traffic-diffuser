@@ -124,7 +124,17 @@ def main(args):
     metrics_testset = []
     for scenario, mp in zip(sorted(os.listdir(args.test_dir)), sorted(os.listdir(args.map_test_dir))):
         data = np.load(os.path.join(args.test_dir, scenario))
-        data = torch.tensor(data[:args.max_num_agents, :, :args.dim_size], dtype=torch.float32).to(device)
+        #data = torch.tensor(data[:args.max_num_agents, :, :args.dim_size], dtype=torch.float32).to(device)
+        data = torch.tensor(data[:, :, :args.dim_size], dtype=torch.float32).to(device)
+        num_agents = data.shape[0]
+        # Crop or pad to the desired max_agent
+        if num_agents >= args.max_num_agents:
+            data = data[:args.max_num_agents]
+        else:
+            # If fewer agents, pad with zeros using torch.cat for efficiency
+            padding = torch.zeros((args.max_num_agents - num_agents, data.shape[1], data.shape[2]), dtype=torch.float32)
+            data = torch.cat((data, padding), dim=0)
+        
         data = data.unsqueeze(0).expand(args.num_sampling, data.size(0), data.size(1), data.size(2))
         h = data[:, :, :args.hist_length, :]        
         if args.use_map_embed:
@@ -192,7 +202,7 @@ def main(args):
             logging.info(f"This evaluation is conducted for scenario {scenario} and involves averaging across all samples and agents:")
             logging.info(f" - Frechet Distance (FD): {mean(FD_scenario)}")
             logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD_scenario)}")
-            logging.info(f" - Polygone Area (PA): {mean(PA_scenario)}")
+            #logging.info(f" - Polygone Area (PA): {mean(PA_scenario)}")
             logging.info(f" - Average Displacement Error (ADE): {mean(ADE_scenario)}")
             logging.info(f" - Final Displacement Error (FDE): {mean(FDE_scenario)} \n")
 
@@ -205,7 +215,7 @@ def main(args):
     logging.info(f"The average evaluation results across all scenarios:")
     logging.info(f" - Frechet Distance (FD): {mean(FD)}")
     logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD)}")
-    logging.info(f" - Polygone Area (PA): {mean(PA)}")
+    #logging.info(f" - Polygone Area (PA): {mean(PA)}")
     logging.info(f" - Average Displacement Error (ADE): {mean(ADE)}")
     logging.info(f" - Final Displacement Error (FDE): {mean(FDE)} \n")
 
@@ -216,8 +226,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes_trainval_clean_test")  # 149 scenarios and 19 ag
-    parser.add_argument("--map-test-dir", type=str, default="/data/tii/data/nuscenes_maps/nuscenes_trainval_raster_test")
+    parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes/nuscenes_trainval_clean_test")  # 149 scenarios and 19 ag
+    parser.add_argument("--map-test-dir", type=str, default="/data/tii/data/nuscenes/nuscenes_maps/nuscenes_trainval_raster_test")
     parser.add_argument("--model-module", type=str, default="model_td")
     parser.add_argument("--model", type=str, default="TrafficDiffuser-S", help='choose from TrafficDiffuser-{S, B, L}')
     parser.add_argument("--max-num-agents", type=int, default=46)

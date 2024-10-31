@@ -10,6 +10,7 @@ The repository is organized as follows:
   * [Data Processing](#data-processing)
   * [Training](#training)
   * [Sampling and Evaluation](#sampling-and-evaluation)
+  * [Backbone Architecture](#backbone-architecture)
 
 ## Overview
 TrafficDiffuser is a PyTorch-based implementation of a conditional trajectory generation model for traffic simulation. It leverages denoising diffusion models to simulate realistic traffic scenarios. 
@@ -108,3 +109,7 @@ The average evaluation results across all scenarios:
 
 #### Visualization of test scenarios 4, 7 and 18:
 ![TrafficDiffuser-L sampling results](docs/asset/Visualizations.png)
+
+
+## Backbone Architecture
+![TrafficDiffuser diffusion backbone](docs/asset/Backbone.png)
