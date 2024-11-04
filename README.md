@@ -1,7 +1,7 @@
 ## The official PyTorch implementation of TrafficDiffuser <br><sub>Denoising Diffusion Model for Traffic Simulation</sub>
 This project features a traffic simulation model for conditional trajectory generation using diffusion models. The model is capable of conditioning on agent histories and environmental maps, generating plausible trajectories for multiple agents with variable sequence length.
 
-![TrafficDiffuser overall architecture](docs/asset/TrafficDiffuser.png)
+![TrafficDiffuser overall architecture](docs/assets/TrafficDiffuser.png)
 
 The repository is organized as follows:
   * [Documentation](#documentation)
@@ -24,13 +24,15 @@ TrafficDiffuser is a PyTorch-based implementation of a conditional trajectory ge
 ``` 
 traffic-diffuser-main
 ├── diffusion/                    # Diffusion dir
-├── docs/asset                    # Documentation figures               
+├── docs/assets                   # Documentation figures               
 ├── models/                       # Backbones dir
 │   └── layers.py                 # Layers and utility functions
 │   └── model_td.py               # TrafficDiffuser backbone
-├── requirements.txt              # Requirements
-├── process_dataset.ipynb         # Data processing pipeline
-├── metrics.py                    # Evaluation metrics               
+├── utils/                        # Utilities dir
+│   └── process_dataset.ipynb     # Data processing pipeline
+│   └── visualize.ipynb           # Scenarios visualization
+│   └── metrics.py                # Evaluation metrics 
+├── requirements.txt              # Requirements             
 ├── sample.py                     # Sampling script 
 └── train.py                      # Training script
 ```
@@ -108,8 +110,8 @@ The average evaluation results across all scenarios:
 ```
 
 #### Visualization of test scenarios 4, 7 and 18:
-![TrafficDiffuser-L sampling results](docs/asset/Visualizations.png)
+![TrafficDiffuser-L sampling results](docs/assets/Visualizations.png)
 
 
 ## Backbone Architecture
-![TrafficDiffuser diffusion backbone](docs/asset/Backbone.png)
+![TrafficDiffuser diffusion backbone](docs/assets/Backbone.png)

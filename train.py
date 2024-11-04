@@ -46,45 +46,25 @@ def load_model(module_name):
 #                                Dataloader                                     #
 #################################################################################
 class CustomDataset(Dataset):
-    def __init__(self, data_path, max_agent, dim_size, map_path, map_size):
+    def __init__(self, data_path, max_agent, hist_length, seq_length, dim_size):
         self.data_path = data_path
         self.max_agent = max_agent
-        self.dim_size = dim_size
-        self.map_path = map_path
-        self.map_size = map_size
+        self.hist_length = hist_length
+        self.seq_length = seq_length
+        self.dim_size = dim_size   
         self.data_files = sorted(os.listdir(data_path))
-        self.map_files = sorted(os.listdir(map_path))
-        self.map_transform = T.Resize(self.map_size)
 
     def __len__(self):
         return len(self.data_files)
 
-    def pad_or_crop_agents(self, data_npy):
-        # Crop to the desired dim_size
-        data_tensor = torch.tensor(data_npy[:, :, :self.dim_size], dtype=torch.float32)
-        num_agents = data_tensor.shape[0]
-        
-        # Crop or pad to the desired max_agent
-        if num_agents >= self.max_agent:
-            return data_tensor[:self.max_agent]
-        else:
-            # If fewer agents, pad with zeros using torch.cat for efficiency
-            padding = torch.zeros((self.max_agent - num_agents, data_tensor.shape[1], data_tensor.shape[2]), dtype=torch.float32)
-            return torch.cat((data_tensor, padding), dim=0)
-
     def __getitem__(self, idx):      
         data_file = self.data_files[idx]
         data_npy = np.load(os.path.join(self.data_path, data_file))
-        
-        # crop to max num agents and dim size
-        #data_tensor = torch.tensor(data_npy[:self.max_agent, :, :self.dim_size], dtype=torch.float32)
-        data_tensor = self.pad_or_crop_agents(data_npy)
-        
-        map_file = self.map_files[idx]
-        map_npy = np.load(os.path.join(self.map_path, map_file))
-        map_tensor = torch.tensor(map_npy, dtype=torch.float32)
-        map_tensor = self.map_transform(map_tensor)
-        return data_tensor, map_tensor
+        data_npy = data_npy[:self.max_agent, :, :self.dim_size]
+        data_tensor = torch.tensor(data_npy, dtype=torch.float32)
+        assert data_tensor.shape == (self.max_agent, self.hist_length + self.seq_length, self.dim_size), \
+            f"Unexpected shape {data_tensor.shape} at index {idx}"
+        return data_tensor
 
 
 
@@ -113,7 +93,13 @@ def main(args):
     
     # Setup Dataloader
     # The dataloader will return a batch of tensor x of shape (B, L, D)
-    dataset = CustomDataset(data_path=args.train_dir, max_agent=args.max_num_agents, dim_size=args.dim_size, map_path=args.map_train_dir, map_size=args.map_size)
+    dataset = CustomDataset(
+        data_path=args.train_dir,
+        max_agent=args.max_num_agents,
+        hist_length=args.hist_length,
+        seq_length=args.seq_length,
+        dim_size=args.dim_size,
+    )
     loader = DataLoader(
         dataset,
         batch_size=int(args.global_batch_size // accelerator.num_processes),
@@ -165,14 +151,10 @@ def main(args):
     for epoch in range(args.epochs):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
-        for data, m in loader:
+        for data in loader:
             x = data[:, :, args.hist_length:, :].to(device)
             h = data[:, :, :args.hist_length, :].to(device)
-            if args.use_map_embed:
-                m = m.to(device)
-                model_kwargs = dict(h=h, m=m)
-            else:
-                model_kwargs = dict(h=h)
+            model_kwargs = dict(h=h)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
@@ -221,12 +203,11 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train-dir", type=str, default="/data/tii/data/nuscenes/nuscenes_trainval_clean_train/")
-    parser.add_argument("--map-train-dir", type=str, default="/data/tii/data/nuscenes/nuscenes_maps/nuscenes_trainval_raster_train")
+    parser.add_argument("--train-dir", type=str, default="/data/tii/data/autod/train_merged_stand")
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model-module", type=str, default="model_td")
     parser.add_argument("--model", type=str, default="TrafficDiffuser-S", help='choose from TrafficDiffuser-{S, B, L}')
-    parser.add_argument("--max-num-agents", type=int, default=46) # 46 for full and 19 for veh
+    parser.add_argument("--max-num-agents", type=int, default=65) # 65 max agents in merged dataset
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
@@ -240,7 +221,7 @@ if __name__ == "__main__":
     parser.add_argument("--global-batch-size", type=int, default=32)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--log-every", type=int, default=21)  #-- 698 for full and 664 for veh
-    parser.add_argument("--ckpt-every", type=int, default=21_000)
+    parser.add_argument("--log-every", type=int, default=7285)  #-- 233104 for train_merged
+    parser.add_argument("--ckpt-every", type=int, default=7285_000)
     args = parser.parse_args()
     main(args)

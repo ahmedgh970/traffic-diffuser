@@ -12,7 +12,7 @@ import torch
 import torchvision.transforms as T
 
 from diffusion import create_diffusion
-from metrics import *
+from utils.metrics import *
 
 
 #################################################################################
