@@ -22,19 +22,31 @@ TrafficDiffuser is a PyTorch-based implementation of a conditional trajectory ge
 
 ## Folder Structure
 ``` 
-traffic-diffuser-main
-├── diffusion/                    # Diffusion dir
-├── docs/assets                   # Documentation figures               
-├── models/                       # Backbones dir
-│   └── layers.py                 # Layers and utility functions
-│   └── model_td.py               # TrafficDiffuser backbone
-├── utils/                        # Utilities dir
-│   └── process_dataset.ipynb     # Data processing pipeline
-│   └── visualize.ipynb           # Scenarios visualization
-│   └── metrics.py                # Evaluation metrics 
-├── requirements.txt              # Requirements             
-├── sample.py                     # Sampling script 
-└── train.py                      # Training script
+traffic-diffuser-main/
+├── configs/                         # Configuration files for training/sampling
+│   ├── config_default.yaml          # Default configuration
+│   ├── config_sample.yaml           # Sampling-specific configurations
+│   └── config_train.yaml            # Training-specific configurations
+├── diffusion/                       # Core diffusion modules
+├── docs/                            # Documentation
+│   ├── assets/                      # Documentation assets
+│   └── README.md                    # Documentation overview and usage guide
+├── models/                          # Model and architecture components
+│   ├── backbones/                   # Backbone networks for traffic diffuser
+│   │   ├── model_td.py              # TrafficDiffuser backbone model
+│   │   ├── layers.py                # Custom layers and utility functions
+│   │   └── test_map_encoder.py      # Map encoder model (e.g., EfficientNet)
+│   └── __init__.py                  # Makes models a package
+├── scripts/                         # Scripts for running tasks
+│   ├── sample.py                    # Sampling script
+│   ├── train.py                     # Training script
+|   └── data_processing.ipynb        # Data processing notebook
+├── utils/                           # Utility functions and helper scripts
+│   ├── metrics.py                   # Evaluation metrics functions
+|   ├── visualization.ipynb          # Visualization notebook
+│   └── __init__.py                  # Makes utils a package
+├── requirements.txt                 # Project dependencies
+└── README.md                        # Project overview, setup, and usage instructions
 ```
 
 ## Setup
