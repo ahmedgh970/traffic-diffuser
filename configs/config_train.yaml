@@ -1,1 +1,26 @@
+data:
+  train_dir: "/data/tii/data/autod/train_merged_stand"
 
+train:
+  results_dir: "results"
+  epochs: 4000
+  diffusion_steps: 1000
+  learning_rate: 1e-4
+  global_batch_size: 32
+  global_seed: 0
+  num_workers: 4
+  log_every: 7285
+  ckpt_every: 7285000
+
+model:
+  module: "model_td"
+  class: "TrafficDiffuser_models"
+  name: "TrafficDiffuser-S"
+  max_num_agents: 65
+  seq_length: 5
+  hist_length: 8
+  dim_size: 2
+  map_size: 256
+  map_channels: 4
+  use_map_embed: true
+  use_ckpt_wrapper: true  

@@ -1,5 +1,6 @@
 import os
 import time
+import yaml
 import argparse
 import numpy as np
 from statistics import mean
@@ -12,7 +13,7 @@ import torch
 import torchvision.transforms as T
 
 from diffusion import create_diffusion
-from utils.metrics import *
+from utils import atdd, fd, ade, fde, interpolate 
 
 
 #################################################################################
@@ -40,16 +41,15 @@ def evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps=10, k
     Evaluate a single agent's generated trajectory against the future ground truth.
     """
     # Extrapolate trajs to the desired num_timesteps
-    valid_agent_gen = interpolate_to_fixed_length(valid_agent_gen, num_timesteps, kind)
-    valid_agent_future = interpolate_to_fixed_length(valid_agent_future, num_timesteps, kind)
+    valid_agent_gen = interpolate(valid_agent_gen, num_timesteps, kind)
+    valid_agent_future = interpolate(valid_agent_future, num_timesteps, kind)
     
     # Calculate metrics
-    FD = calculate_frechet_distance(valid_agent_future, valid_agent_gen)
-    ATDD = calculate_diff_distance_traveled(valid_agent_future, valid_agent_gen)
-    PA = calculate_polygone_area(valid_agent_future, valid_agent_gen)
-    ADE = calculate_ade(valid_agent_future, valid_agent_gen)
-    FDE = calculate_fde(valid_agent_future, valid_agent_gen)
-    return FD, ATDD, PA, ADE, FDE
+    FD = fd(valid_agent_future, valid_agent_gen)
+    ATDD = atdd(valid_agent_future, valid_agent_gen)
+    ADE = ade(valid_agent_future, valid_agent_gen)
+    FDE = fde(valid_agent_future, valid_agent_gen)
+    return FD, ATDD, ADE, FDE
     
 
 
@@ -122,29 +122,12 @@ def main(args):
         
     # Sample trajectories from testset:
     metrics_testset = []
-    for scenario, mp in zip(sorted(os.listdir(args.test_dir)), sorted(os.listdir(args.map_test_dir))):
+    for scenario in sorted(os.listdir(args.test_dir)):
         data = np.load(os.path.join(args.test_dir, scenario))
-        #data = torch.tensor(data[:args.max_num_agents, :, :args.dim_size], dtype=torch.float32).to(device)
-        data = torch.tensor(data[:, :, :args.dim_size], dtype=torch.float32).to(device)
-        num_agents = data.shape[0]
-        # Crop or pad to the desired max_agent
-        if num_agents >= args.max_num_agents:
-            data = data[:args.max_num_agents]
-        else:
-            # If fewer agents, pad with zeros using torch.cat for efficiency
-            padding = torch.zeros((args.max_num_agents - num_agents, data.shape[1], data.shape[2]), dtype=torch.float32)
-            data = torch.cat((data, padding), dim=0)
-        
+        data = torch.tensor(data[:args.max_num_agents, :, :args.dim_size], dtype=torch.float32).to(device)        
         data = data.unsqueeze(0).expand(args.num_sampling, data.size(0), data.size(1), data.size(2))
         h = data[:, :, :args.hist_length, :]        
-        if args.use_map_embed:
-            m = np.load(os.path.join(args.map_test_dir, mp))
-            m = torch.tensor(m, dtype=torch.float32).to(device)
-            m = T.Resize(args.map_size)(m)
-            m = m.unsqueeze(0).expand(args.num_sampling, m.size(0), m.size(1), m.size(2))
-            model_kwargs = dict(h=h, m=m)
-        else:
-            model_kwargs = dict(h=h)
+        model_kwargs = dict(h=h)
         
         # Create sampling noise:
         x = torch.randn(args.num_sampling, args.max_num_agents, args.seq_length, args.dim_size, device=device)
@@ -168,7 +151,7 @@ def main(args):
         # Scenario evaluation loop
         data_future = data[:, :, args.hist_length-1:, :].cpu().numpy()   # (N, L_seq_length + 1, D)
         epsilon, num_timesteps, kind = 0.1, args.seq_length*2, 'linear'
-        FD_scenario, ATDD_scenario, PA_scenario, ADE_scenario, FDE_scenario  = [], [], [], [], []
+        FD_scenario, ATDD_scenario, ADE_scenario, FDE_scenario  = [], [], [], []
         
         # Evaluate each agent's trajectories
         for ag in range(samples.shape[1]):
@@ -188,10 +171,9 @@ def main(args):
             
             if metrics != []:
                 # Unpack metrics and store the average
-                FD, ATDD, PA, ADE, FDE = zip(*metrics)               
+                FD, ATDD, ADE, FDE = zip(*metrics)               
                 FD_scenario.append(mean(FD))
                 ATDD_scenario.append(mean(ATDD))
-                PA_scenario.append(mean(PA))
                 ADE_scenario.append(mean(ADE))
                 FDE_scenario.append(mean(FDE))
         
@@ -202,20 +184,18 @@ def main(args):
             logging.info(f"This evaluation is conducted for scenario {scenario} and involves averaging across all samples and agents:")
             logging.info(f" - Frechet Distance (FD): {mean(FD_scenario)}")
             logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD_scenario)}")
-            #logging.info(f" - Polygone Area (PA): {mean(PA_scenario)}")
             logging.info(f" - Average Displacement Error (ADE): {mean(ADE_scenario)}")
             logging.info(f" - Final Displacement Error (FDE): {mean(FDE_scenario)} \n")
 
             print(f"Logs have been saved to {log_filename}")
             
-            metrics_testset.append((mean(FD_scenario), mean(ATDD_scenario), mean(PA_scenario), mean(ADE_scenario), mean(FDE_scenario)))
+            metrics_testset.append((mean(FD_scenario), mean(ATDD_scenario), mean(ADE_scenario), mean(FDE_scenario)))
     
     # Logging the average result on the full testset
-    FD, ATDD, PA, ADE, FDE = zip(*metrics_testset)
+    FD, ATDD, ADE, FDE = zip(*metrics_testset)
     logging.info(f"The average evaluation results across all scenarios:")
     logging.info(f" - Frechet Distance (FD): {mean(FD)}")
     logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD)}")
-    #logging.info(f" - Polygone Area (PA): {mean(PA)}")
     logging.info(f" - Average Displacement Error (ADE): {mean(ADE)}")
     logging.info(f" - Final Displacement Error (FDE): {mean(FDE)} \n")
 
@@ -227,15 +207,12 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--test-dir", type=str, default="/data/tii/data/nuscenes/nuscenes_trainval_clean_test")  # 149 scenarios and 19 ag
-    parser.add_argument("--map-test-dir", type=str, default="/data/tii/data/nuscenes/nuscenes_maps/nuscenes_trainval_raster_test")
     parser.add_argument("--model-module", type=str, default="model_td")
     parser.add_argument("--model", type=str, default="TrafficDiffuser-S", help='choose from TrafficDiffuser-{S, B, L}')
     parser.add_argument("--max-num-agents", type=int, default=46)
     parser.add_argument("--seq-length", type=int, default=5)
     parser.add_argument("--hist-length", type=int, default=8)
     parser.add_argument("--dim-size", type=int, default=2)
-    parser.add_argument("--map-size", type=int, default=256)
-    parser.add_argument("--map-channels", type=int, default=4)
     parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp instead of mlp')
     parser.add_argument("--use-map-embed", action='store_true', help='using history embedding conditioning')
     parser.add_argument("--num-sampling", type=int, default=100)

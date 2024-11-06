@@ -16,7 +16,6 @@ from accelerate import Accelerator
 from diffusion import create_diffusion
 
 
-
 #################################################################################
 #                             Helper Functions                                  #
 #################################################################################
@@ -34,12 +33,12 @@ def create_logger(logging_dir):
     
     return logger
 
-def load_model(module_name):
+def load_model(module_name, class_name):
     """
     Dynamically load the model class from the specified module.
     """
-    module = importlib.import_module(f"models.{module_name}")
-    model_class = getattr(module, 'TrafficDiffuser_models')
+    module = importlib.import_module(f"models.backbones.{module_name}")
+    model_class = getattr(module, class_name)
     return model_class
 
 def load_config(config_path):
@@ -48,7 +47,7 @@ def load_config(config_path):
     return config
 
 #################################################################################
-#                                Dataloader                                     #
+#                                Dataset                                        #
 #################################################################################
 class CustomDataset(Dataset):
     def __init__(self, data_path, max_agent, hist_length, seq_length, dim_size):
@@ -88,58 +87,61 @@ def main(args):
 
     # Setup an experiment folder:
     if accelerator.is_main_process:
-        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{args.results_dir}/*"))
-        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{args.model}"  # Create an experiment folder
-        checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+        os.makedirs(config['train']['results_dir'], exist_ok=True)
+        experiment_index = len(glob(f"{config['train']['results_dir']}/*"))
+        experiment_dir = f"{config['train']['results_dir']}/{experiment_index:03d}-{config['model']['name']}"
+        checkpoint_dir = f"{experiment_dir}/checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
     
     # Setup Dataloader
-    # The dataloader will return a batch of tensor x of shape (B, L, D)
     dataset = CustomDataset(
-        data_path=args.train_dir,
-        max_agent=args.max_num_agents,
-        hist_length=args.hist_length,
-        seq_length=args.seq_length,
-        dim_size=args.dim_size,
+        data_path=config['train']['train_dir'],
+        max_agent=config['model']['max_num_agents'],
+        hist_length=config['model']['hist_length'],
+        seq_length=config['model']['seq_length'],
+        dim_size=config['model']['dim_size'],
     )
     loader = DataLoader(
         dataset,
-        batch_size=int(args.global_batch_size // accelerator.num_processes),
+        batch_size=int(config['train']['global_batch_size'] // accelerator.num_processes),
         shuffle=True,
-        num_workers=args.num_workers,
+        num_workers=config['train']['num_workers'],
         pin_memory=True,
         drop_last=True,
     )
     if accelerator.is_main_process:
-        logger.info(f"Dataset contains {len(dataset):,} scenarios ({args.train_dir})")
-        
+        logger.info(f"Dataset contains {len(dataset):,} scenarios")
+    
     # Create model:
-    model_class = load_model(args.model_module)
-    model = model_class[args.model](
-        max_num_agents = args.max_num_agents,
-        seq_length=args.seq_length,
-        hist_length=args.hist_length,
-        dim_size=args.dim_size,
-        map_channels=args.map_channels,
-        use_gmlp=args.use_gmlp,
-        use_map_embed=args.use_map_embed,
-        use_ckpt_wrapper=args.use_ckpt_wrapper,
+    # Note that parameter initialization is done within the model constructor
+    model_class = load_model(config['model']['module'], config['model']['class'])
+    model = model_class[config['model']['name']](
+        max_num_agents=config['model']['max_num_agents'],
+        seq_length=config['model']['seq_length'],
+        hist_length=config['model']['hist_length'],
+        dim_size=config['model']['dim_size'],
+        map_channels=config['model']['map_channels'],
+        use_map_embed=config['model']['use_map_embed'],
+        use_ckpt_wrapper=config['model']['use_ckpt_wrapper'],
     ).to(device)
     
     # Model summary:
     if accelerator.is_main_process:
         logger.info(f"Model summary:\n{model}")
     
-    # Note that parameter initialization is done within the model constructor
-    diffusion = create_diffusion(timestep_respacing="", noise_schedule="linear", diffusion_steps=args.diffusion_steps)
+    # Create diffusion
+    diffusion = create_diffusion(
+        timestep_respacing="",
+        noise_schedule="linear",
+        diffusion_steps=config['train']['diffusion_steps']
+    )
     if accelerator.is_main_process:
-        logger.info(f"{args.model} Parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"{config['model']['name']} Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Setup optimizer:
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    opt = torch.optim.AdamW(model.parameters(), lr=config['train']['learning_rate'], weight_decay=0)
     
     # Prepare models for training:
     model.train()
@@ -150,15 +152,16 @@ def main(args):
     log_steps = 0
     running_loss = 0
     start_time = time()
+    num_epochs = config['train']['epochs']
     
     if accelerator.is_main_process:
-        logger.info(f"Training for {args.epochs} epochs...")
-    for epoch in range(args.epochs):
+        logger.info(f"Training for {num_epochs} epochs...")
+    for epoch in range(num_epochs):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
         for data in loader:
-            x = data[:, :, args.hist_length:, :].to(device)
-            h = data[:, :, :args.hist_length, :].to(device)
+            x = data[:, :, config['model']['hist_length']:, :].to(device)
+            h = data[:, :, :config['model']['hist_length'], :].to(device)
             model_kwargs = dict(h=h)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
@@ -171,7 +174,7 @@ def main(args):
             running_loss += loss.item()
             log_steps += 1
             train_steps += 1
-            if train_steps % args.log_every == 0:
+            if train_steps % config['train']['log_every'] == 0:
                 # Measure training speed:
                 torch.cuda.synchronize()
                 end_time = time()
@@ -187,7 +190,7 @@ def main(args):
                 start_time = time()
 
             # Save model checkpoint:
-            if train_steps % args.ckpt_every == 0 and train_steps > 0:
+            if train_steps % config['train']['ckpt_every'] == 0 and train_steps > 0:
                 if accelerator.is_main_process:
                     checkpoint = {
                         "model": model.module.state_dict(),
@@ -203,30 +206,13 @@ def main(args):
 
 
 # To launch TrafficDiffuser-S training with one or multiple GPUs on one node:
-# accelerate launch train.py --model TrafficDiffuser-S --max-num-agents 46 --hist-length 8 --seq-length 5 --use-map-embed --use-ckpt-wrapper
-# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 train.py --model TrafficDiffuser-S --max-num-agents 46 --hist-length 8 --seq-length 5 --use-map-embed --use-ckpt-wrapper
+# accelerate launch scripts/train.py --config configs/config_train.yaml
+# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 scripts/train.py --config configs/config_train.yaml
 
+# Load configuration and run main function
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train-dir", type=str, default="/data/tii/data/autod/train_merged_stand")
-    parser.add_argument("--results-dir", type=str, default="results")
-    parser.add_argument("--model-module", type=str, default="model_td")
-    parser.add_argument("--model", type=str, default="TrafficDiffuser-S", help='choose from TrafficDiffuser-{S, B, L}')
-    parser.add_argument("--max-num-agents", type=int, default=65) # 65 max agents in merged dataset
-    parser.add_argument("--seq-length", type=int, default=5)
-    parser.add_argument("--hist-length", type=int, default=8)
-    parser.add_argument("--dim-size", type=int, default=2)
-    parser.add_argument("--map-size", type=int, default=256)
-    parser.add_argument("--map-channels", type=int, default=4)
-    parser.add_argument("--use-gmlp", action='store_true', help='using gated mlp instead of mlp')
-    parser.add_argument("--use-map-embed", action='store_true', help='using map embedding conditioning')
-    parser.add_argument("--use-ckpt-wrapper", action='store_true', help='using checkpoint wrapper for memory saving during training')
-    parser.add_argument("--diffusion-steps", type=int, default=1000)
-    parser.add_argument("--epochs", type=int, default=4000)
-    parser.add_argument("--global-batch-size", type=int, default=32)
-    parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--log-every", type=int, default=7285)  #-- 233104 for train_merged
-    parser.add_argument("--ckpt-every", type=int, default=7285_000)
+    parser.add_argument("--config", type=str, default="configs/config_train.yaml")
     args = parser.parse_args()
-    main(args)
+    config = load_config(args.config)
+    main(config)
