@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from models.layers import modulate, AdaTransformer
+from models.backbones.layers import modulate, AdaTransformer
 
 
 
@@ -114,7 +114,6 @@ class TrafficDiffuser(nn.Module):
         hist_length,
         dim_size,
         map_channels,
-        use_gmlp,
         use_map_embed,
         use_ckpt_wrapper,
         hidden_size,
@@ -134,7 +133,7 @@ class TrafficDiffuser(nn.Module):
         
         self.t_pos_embed = nn.Parameter(torch.zeros(1, hist_length+seq_length, hidden_size), requires_grad=True)
         self.t_blocks = nn.ModuleList([
-            AdaTransformer(hidden_size, num_heads, use_gmlp=use_gmlp, mlp_ratio=mlp_ratio) for _ in range(depth)
+            AdaTransformer(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         
         self.final_layer = FinalLayer(max_num_agents, hist_length+seq_length, dim_size, hidden_size) 

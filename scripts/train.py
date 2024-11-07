@@ -1,19 +1,18 @@
+import torch
+from torch.utils.data import Dataset, DataLoader, Subset
+import torchvision.transforms as T
 import os
+import sys
 import argparse
 import logging
 from glob import glob
 from time import time
 import importlib
 import yaml
-
-import torch
-from torch.utils.data import Dataset, DataLoader
-import torchvision.transforms as T
-
 import numpy as np
 from accelerate import Accelerator
-
 from diffusion import create_diffusion
+
 
 
 #################################################################################
@@ -37,7 +36,7 @@ def load_model(module_name, class_name):
     """
     Dynamically load the model class from the specified module.
     """
-    module = importlib.import_module(f"models.backbones.{module_name}")
+    module = importlib.import_module(f"{module_name}")
     model_class = getattr(module, class_name)
     return model_class
 
@@ -46,6 +45,14 @@ def load_config(config_path):
         config = yaml.safe_load(file)
     return config
 
+def get_subset_loader(dataset, subset_size):
+    """
+    Create a subset from a full dataset
+    """
+    subset_indices = np.random.choice(len(dataset), size=subset_size, replace=False)
+    return Subset(dataset, subset_indices)
+    
+    
 #################################################################################
 #                                Dataset                                        #
 #################################################################################
@@ -56,7 +63,7 @@ class CustomDataset(Dataset):
         self.hist_length = hist_length
         self.seq_length = seq_length
         self.dim_size = dim_size   
-        self.data_files = sorted(os.listdir(data_path))
+        self.data_files = sorted(os.listdir(data_path)[:3199])
 
     def __len__(self):
         return len(self.data_files)
@@ -75,7 +82,7 @@ class CustomDataset(Dataset):
 #################################################################################
 #                                  Training Loop                                #
 #################################################################################
-def main(args):
+def main(config):
     """
     Trains a diffusion model.
     """
@@ -84,12 +91,20 @@ def main(args):
     # Setup accelerator:
     accelerator = Accelerator()
     device = accelerator.device
-
+    
+    # Initialize var from config file
+    max_num_agents=config['model']['max_num_agents']
+    seq_length=config['model']['seq_length']
+    hist_length=config['model']['hist_length']
+    dim_size=config['model']['dim_size']
+    model_name = config['model']['name']
+    results_dir = config['train']['results_dir']
+    
     # Setup an experiment folder:
     if accelerator.is_main_process:
-        os.makedirs(config['train']['results_dir'], exist_ok=True)
-        experiment_index = len(glob(f"{config['train']['results_dir']}/*"))
-        experiment_dir = f"{config['train']['results_dir']}/{experiment_index:03d}-{config['model']['name']}"
+        os.makedirs(results_dir, exist_ok=True)
+        experiment_index = len(glob(f"{results_dir}/*"))
+        experiment_dir = f"{results_dir}/{experiment_index:03d}-{model_name}"
         checkpoint_dir = f"{experiment_dir}/checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
@@ -97,12 +112,13 @@ def main(args):
     
     # Setup Dataloader
     dataset = CustomDataset(
-        data_path=config['train']['train_dir'],
-        max_agent=config['model']['max_num_agents'],
-        hist_length=config['model']['hist_length'],
-        seq_length=config['model']['seq_length'],
-        dim_size=config['model']['dim_size'],
+        data_path=config['data']['train_dir'],
+        max_agent=max_num_agents,
+        hist_length=hist_length,
+        seq_length=seq_length,
+        dim_size=dim_size,
     )
+    #dataset = get_subset_loader(dataset, subset_size=3200)
     loader = DataLoader(
         dataset,
         batch_size=int(config['train']['global_batch_size'] // accelerator.num_processes),
@@ -117,11 +133,11 @@ def main(args):
     # Create model:
     # Note that parameter initialization is done within the model constructor
     model_class = load_model(config['model']['module'], config['model']['class'])
-    model = model_class[config['model']['name']](
-        max_num_agents=config['model']['max_num_agents'],
-        seq_length=config['model']['seq_length'],
-        hist_length=config['model']['hist_length'],
-        dim_size=config['model']['dim_size'],
+    model = model_class[model_name](
+        max_num_agents=max_num_agents,
+        seq_length=seq_length,
+        hist_length=hist_length,
+        dim_size=dim_size,
         map_channels=config['model']['map_channels'],
         use_map_embed=config['model']['use_map_embed'],
         use_ckpt_wrapper=config['model']['use_ckpt_wrapper'],
@@ -138,10 +154,10 @@ def main(args):
         diffusion_steps=config['train']['diffusion_steps']
     )
     if accelerator.is_main_process:
-        logger.info(f"{config['model']['name']} Parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"{model_name} Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Setup optimizer:
-    opt = torch.optim.AdamW(model.parameters(), lr=config['train']['learning_rate'], weight_decay=0)
+    opt = torch.optim.AdamW(model.parameters(), lr=float(config['train']['learning_rate']), weight_decay=0)
     
     # Prepare models for training:
     model.train()
@@ -160,8 +176,8 @@ def main(args):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
         for data in loader:
-            x = data[:, :, config['model']['hist_length']:, :].to(device)
-            h = data[:, :, :config['model']['hist_length'], :].to(device)
+            x = data[:, :, hist_length:, :].to(device)
+            h = data[:, :, :hist_length, :].to(device)
             model_kwargs = dict(h=h)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
@@ -195,7 +211,7 @@ def main(args):
                     checkpoint = {
                         "model": model.module.state_dict(),
                         "opt": opt.state_dict(),
-                        "args": args
+                        "config": config
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
@@ -205,11 +221,6 @@ def main(args):
         logger.info("Done!")
 
 
-# To launch TrafficDiffuser-S training with one or multiple GPUs on one node:
-# accelerate launch scripts/train.py --config configs/config_train.yaml
-# accelerate launch --num-processes=1 --gpu_ids 1 --main_process_port 29502 scripts/train.py --config configs/config_train.yaml
-
-# Load configuration and run main function
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="configs/config_train.yaml")

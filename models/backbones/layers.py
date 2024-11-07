@@ -17,7 +17,7 @@ class AdaTransformer(nn.Module):
     """
     A Transformer block with adaptive layer norm zero (adaLN-Zero) conditioning
     """
-    def __init__(self, hidden_size, num_heads, use_gmlp, mlp_ratio=4.0):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
         super().__init__()
         self.num_heads = num_heads
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -25,10 +25,7 @@ class AdaTransformer(nn.Module):
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
-        if use_gmlp:
-            self.mlp = Gmlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-        else:
-            self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
@@ -48,7 +45,7 @@ class Transformer(nn.Module):
     """
     A Transformer block
     """
-    def __init__(self, hidden_size, num_heads, use_gmlp, mlp_ratio=4.0):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
         super().__init__()
         self.num_heads = num_heads
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -56,10 +53,7 @@ class Transformer(nn.Module):
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
-        if use_gmlp:
-            self.mlp = Gmlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-        else:
-            self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
 
     def forward(self, x, mask=None):
         # (B, L, H)
@@ -152,25 +146,6 @@ class Mlp(nn.Module):
         x = self.norm(x)
         x = self.fc2(x)
         x = self.drop2(x)
-        return x
-
-
-class Gmlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-
-        self.fc1 = nn.Linear(in_features, 2 * hidden_features)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop = nn.Dropout(drop)
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x, z = x.chunk(2, dim=(-1))
-        x = self.fc2(x * self.act(z))
-        x = self.drop(x)
         return x
 
 

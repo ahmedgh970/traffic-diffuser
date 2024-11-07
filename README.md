@@ -10,7 +10,6 @@ The repository is organized as follows:
   * [Data Processing](#data-processing)
   * [Training](#training)
   * [Sampling and Evaluation](#sampling-and-evaluation)
-  * [Backbone Architecture](#backbone-architecture)
 
 ## Overview
 TrafficDiffuser is a PyTorch-based implementation of a conditional trajectory generation model for traffic simulation. It leverages denoising diffusion models to simulate realistic traffic scenarios. 
@@ -23,30 +22,31 @@ TrafficDiffuser is a PyTorch-based implementation of a conditional trajectory ge
 ## Folder Structure
 ``` 
 traffic-diffuser-main/
-├── configs/                         # Configuration files for training/sampling
-│   ├── config_default.yaml          # Default configuration
-│   ├── config_sample.yaml           # Sampling-specific configurations
-│   └── config_train.yaml            # Training-specific configurations
-├── diffusion/                       # Core diffusion modules
-├── docs/                            # Documentation
-│   ├── assets/                      # Documentation assets
-│   └── README.md                    # Documentation overview and usage guide
-├── models/                          # Model and architecture components
-│   ├── backbones/                   # Backbone networks for traffic diffuser
-│   │   ├── model_td.py              # TrafficDiffuser backbone model
-│   │   ├── layers.py                # Custom layers and utility functions
-│   │   └── test_map_encoder.py      # Map encoder model (e.g., EfficientNet)
-│   └── __init__.py                  # Makes models a package
-├── scripts/                         # Scripts for running tasks
-│   ├── sample.py                    # Sampling script
-│   ├── train.py                     # Training script
-|   └── data_processing.ipynb        # Data processing notebook
-├── utils/                           # Utility functions and helper scripts
-│   ├── metrics.py                   # Evaluation metrics functions
-|   ├── visualization.ipynb          # Visualization notebook
-│   └── __init__.py                  # Makes utils a package
-├── requirements.txt                 # Project dependencies
-└── README.md                        # Project overview, setup, and usage instructions
+├── configs/                           # Configuration files for training/sampling
+│     ├── config_sample.yaml           # Sampling-specific configurations
+│     └── config_train.yaml            # Training-specific configurations
+├── diffusion/                         # Core diffusion modules
+├── docs/                              # Documentation
+│     ├── assets/                      # Documentation assets
+│     └── README.md                    # Documentation overview and usage guide
+├── models/                            # Model and architecture components
+│     ├── backbones/                   # Backbone networks for traffic diffuser
+│     │   ├── model_td.py              # TrafficDiffuser backbone model
+│     │   └── layers.py                # Custom layers and utility functions
+│     ├── test_model_td.py             # Test model_td backbone efficiency
+│     └── test_map_encoder.py          # Test map encoder efficiency
+├── scripts/                           # Scripts for running tasks
+│     ├── sample.py                    # Sampling script
+│     ├── train.py                     # Training script
+|     └── data_processing.ipynb        # Data processing notebook
+├── utils/                             # Utility functions and helper scripts
+│     ├── interpolate.py               # Helper function for traj interpolation
+│     ├── metrics.py                   # Evaluation metrics functions
+|     ├── visualization.ipynb          # Visualization notebook
+│     └── __init__.py                  # Makes utils a package
+├── main.py                            # Main file to run train and sample
+├── requirements.txt                   # Project dependencies
+└── README.md                          # Project overview, setup, and usage instructions
 ```
 
 ## Setup
@@ -78,34 +78,27 @@ pip install -e .
 ```
 
 ## Data Processing
-First, convert and merge the original datasets (nuscenes, waymo, etc.) into unified dictionary-formatted pickle files using ScenarioNet. Next, preprocess these pickle files to generate the data and map directories in the required format. Lastly, complete the data processing pipeline to obtain the final rasterized maps, along with the final training and testing scenarios. Follow the [`preprocess_dataset.ipynb`](process_dataset.ipynb) notebook to perform these three data processing steps on nuScenes and Waymo.
+First, convert and merge the original datasets (nuscenes, waymo, etc.) into unified dictionary-formatted pickle files using ScenarioNet. Next, preprocess these pickle files to generate the data and map directories in the required format. Lastly, complete the data processing pipeline to obtain the final rasterized maps, along with the final training and testing scenarios. Follow the [`process_dataset.ipynb`](process_dataset.ipynb) notebook to perform these three data processing steps on nuScenes and Waymo.
 
 
 ## Training
-We provide a training script for TrafficDiffuser model in [`train.py`](train.py).
+We provide a training script for TrafficDiffuser model in [`scripts/train.py`](scripts/train.py).
 
-To launch TrafficDiffuser-L training with `N` GPUs on one node:
+To launch TrafficDiffuser training with `N` GPUs on one node:
 ```bash
-accelerate launch train.py --model-module model_td --model TrafficDiffuser-L \
-  --max-num-agents 46 --hist-length 8 --seq-length 5 --use-map-embed --use-ckpt-wrapper \
-    --train-dir /path/to/preprocessed/scenarios/ --map-train-dir /path/to/maps/
+accelerate launch -m scripts.train --config configs/config_train.yaml
 ```
 
-To launch TrafficDiffuser-L training with `1` GPU (id=1):
+To launch TrafficDiffuser training with `1` GPU (id=1):
 ```bash
-accelerate launch --num-processes=1 --gpu_ids 1 train.py --model-module model_td --model TrafficDiffuser-L \
-  --max-num-agents 46 --hist-length 8 --seq-length 5 --use-map-embed --use-ckpt-wrapper \
-    --train-dir /path/to/preprocessed/scenarios/ --map-train-dir /path/to/maps/
+accelerate launch --num-processes=1 --gpu_ids 1 -m scripts.train --config configs/config_train.yaml
 ```
 
 
 ## Sampling and Evaluation
-
-To sample trajectories from a pretrained TrafficDiffuser-L model, using GPU id 1, run:
+To sample trajectories from a pretrained TrafficDiffuser model, run:
 ```bash
-python sample.py --cuda-device 1 --model-module model_td --model TrafficDiffuser-L \
-  --max-num-agents 46 --hist-length 8 --seq-length 5 --num-sampling-steps 250 --num-sampling 100 --use-map-embed \
-    --ckpt /path/to/model.pt --test-dir /path/to/preprocessed/test/scenarios/ --map-test-dir /path/to/test/maps/
+python -m scripts.sample --config configs/config_sample.yaml
 ```
 
 The sampling results are automatically saved in the model's designated results directory, organized within the samples subfolder for easy access. Additionally, evaluation metrics such as FD (Fréchet Distance), ADE (Average Displacement Error), and others are logged for each test scenarios. The evaluation log file alse include the model summary, number of parameters, FLOPs, and inference runtime.
@@ -123,7 +116,3 @@ The average evaluation results across all scenarios:
 
 #### Visualization of test scenarios 4, 7 and 18:
 ![TrafficDiffuser-L sampling results](docs/assets/Visualizations.png)
-
-
-## Backbone Architecture
-![TrafficDiffuser diffusion backbone](docs/assets/Backbone.png)

@@ -1,0 +1,25 @@
+data:
+  train_dir: "/data/tii/data/autod/train_s10"
+
+train:
+  results_dir: "results"
+  epochs: 4000
+  diffusion_steps: 1000
+  learning_rate: 1e-4
+  global_batch_size: 32
+  global_seed: 0
+  num_workers: 4
+  log_every: 100
+  ckpt_every: 100_000
+
+model:
+  module: "models.backbones.model_td"
+  class: "TrafficDiffuser_models"
+  name: "TrafficDiffuser-S"
+  max_num_agents: 20
+  seq_length: 5
+  hist_length: 8
+  dim_size: 2
+  map_channels: 4
+  use_map_embed: False
+  use_ckpt_wrapper: False 
