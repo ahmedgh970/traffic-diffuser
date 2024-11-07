@@ -125,8 +125,7 @@ def main(config):
         
     # Sample trajectories from testset:
     metrics_testset = []
-    max_num_scenarios = 640
-    for scenario in sorted(os.listdir(config['data']['test_dir']))[:max_num_scenarios]:
+    for scenario in sorted(os.listdir(config['data']['test_dir']))[:config['data']['subset_size']]:
         data = np.load(os.path.join(config['data']['test_dir'], scenario))
         data = torch.tensor(data[:max_num_agents, :, :dim_size], dtype=torch.float32).to(device)        
         data = data.unsqueeze(0).expand(config['sample']['num_sampling'], data.size(0), data.size(1), data.size(2))

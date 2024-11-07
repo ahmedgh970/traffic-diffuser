@@ -63,7 +63,7 @@ class CustomDataset(Dataset):
         self.hist_length = hist_length
         self.seq_length = seq_length
         self.dim_size = dim_size   
-        self.data_files = sorted(os.listdir(data_path)[:3199])
+        self.data_files = sorted(os.listdir(data_path))
 
     def __len__(self):
         return len(self.data_files)
@@ -86,6 +86,7 @@ def main(config):
     """
     Trains a diffusion model.
     """
+    torch.manual_seed(config['train']['seed'])
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
 
     # Setup accelerator:
@@ -118,7 +119,7 @@ def main(config):
         seq_length=seq_length,
         dim_size=dim_size,
     )
-    #dataset = get_subset_loader(dataset, subset_size=3200)
+    dataset = get_subset_loader(dataset, subset_size=config['data']['subset_size'])
     loader = DataLoader(
         dataset,
         batch_size=int(config['train']['global_batch_size'] // accelerator.num_processes),

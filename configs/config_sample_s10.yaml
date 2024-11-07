@@ -1,5 +1,6 @@
 data:
   test_dir: "/data/tii/data/autod/test_s10"
+  subset_size: 640
 
 sample:
   num_sampling: 100

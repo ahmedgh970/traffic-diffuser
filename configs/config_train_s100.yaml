@@ -1,5 +1,6 @@
 data:
   train_dir: "/data/tii/data/autod/train_s100"
+  subset_size: 3200
 
 train:
   results_dir: "results"
@@ -11,6 +12,7 @@ train:
   num_workers: 4
   log_every: 100
   ckpt_every: 100_000
+  seed: 0
 
 model:
   module: "models.backbones.model_td"
