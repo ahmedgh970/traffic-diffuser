@@ -1,0 +1,25 @@
+# Ignore gitignore and todo list
+.gitignore
+TODO.md
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore screen log.txt and main*.py files
+logs/
+main_train.py
+main_train1.py
+main_train2.py
+main_sample.py
+main_sample1.py
+main_sample2.py
+
+# Ignore evaluate jupyter notebook
+utils/visualize.ipynb
+
+# Ignore results and other directories
+results
+backup
+metadrive
+scenarionet
