@@ -86,7 +86,7 @@ def main(config):
     """
     Trains a diffusion model.
     """
-    torch.manual_seed(config['train']['seed'])
+    np.random.seed(config['train']['seed'])    # to enable the same subset of trainset
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
 
     # Setup accelerator:

@@ -1,0 +1,2 @@
+[?2004h(base) ahmed.ghorbel@chapelle:/data/ahmed.ghorbel/workdir/autod/traffic-diffuser$ conda activate traffsim
+[?2004l[?2004h(traffsim) ahmed.ghorbel@chapelle:/data/ahmed.ghorbel/workdir/autod/traffic-diffuser$ 

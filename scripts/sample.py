@@ -36,6 +36,34 @@ def load_config(config_path):
         config = yaml.safe_load(file)
     return config    
 
+def testset_stats(test_files):
+    """
+    Count occurrences of each dataset type
+    """
+    dataset_counts = {'av2': 0, 'nuscenes': 0, 'waymo': 0}
+    for file_name in test_files:
+        for dataset in dataset_counts:
+            if dataset in file_name:
+                dataset_counts[dataset] += 1
+                break
+    stats =""
+    for dataset, count in dataset_counts.items():
+        stats = stats + f"{dataset}: {count}\n"
+    return stats
+
+def dataset_stats(file_name):
+    scale_factor = 100
+    dataset_stats = {
+        'av2': ([2677.9026, 1098.3357], [3185.974, 1670.7698]),
+        'waymo': ([1699.1744, 305.3823], [5284.104, 6511.814]),
+        'nuscenes': ([998.90979829, 1372.90628199], [539.07656177, 463.67307649])
+    } 
+    for dataset_name, (mn, std) in dataset_stats.items():
+        if dataset_name in file_name:
+            return mn, std, scale_factor
+    else:
+        raise ValueError(f"Unrecognized dataset for file name: {file_name}")
+        
 def evaluate_trajectory(gen_traj, gt_traj, num_timesteps=10, kind='linear'):
     """
     Evaluate a single generated trajectory against the future ground truth.
@@ -59,6 +87,7 @@ def evaluate_trajectory(gen_traj, gt_traj, num_timesteps=10, kind='linear'):
 def main(config):
     # Setup PyTorch:
     torch.manual_seed(config['sample']['seed'])
+    random.seed(config['sample']['seed'])
     torch.set_grad_enabled(False)
     device = f"cuda:{config['sample']['cuda_device']}" if torch.cuda.is_available() else "cpu"
     
@@ -124,15 +153,11 @@ def main(config):
     avg_sampling_time /= num_trials
     logging.info(f"{model_name} Sampling time: {avg_sampling_time:.2f} s")
         
-    # Sample trajectories from testset:
-    scale_factor = 100             
-    dataset_stats = {
-        'av2': ([2677.9026, 1098.3357], [3185.974, 1670.7698]),
-        'waymo': ([1699.1744, 305.3823], [5284.104, 6511.814]),
-        'nuscenes': ([998.90979829, 1372.90628199], [539.07656177, 463.67307649])
-    } 
+    # Sample trajectories from testset:            
     metrics_testset = []
-    for scenario in random.sample(sorted(os.listdir(config['data']['test_dir']), config['data']['subset_size'])):
+    test_files = sorted(random.sample(sorted(os.listdir(config['data']['test_dir'])), config['data']['subset_size']))
+    logging.info(f"The occurence of each dataset in the testset are:\n{testset_stats(test_files)}")
+    for scenario in test_files:
         data = np.load(os.path.join(config['data']['test_dir'], scenario))
         data = torch.tensor(data[:max_num_agents, :, :dim_size], dtype=torch.float32).to(device)        
         data = data.unsqueeze(0).expand(config['sample']['num_sampling'], data.size(0), data.size(1), data.size(2))
@@ -163,13 +188,8 @@ def main(config):
         epsilon, num_timesteps, kind = 0.1, seq_length*2, 'linear'
         FD_scenario, ATDD_scenario, ADE_scenario, FDE_scenario  = [], [], [], []
 
-        # Find the matching dataset stats based on the file name
-        for dataset_name, (mn, std) in dataset_stats.items():
-            if dataset_name in file_name:
-                mean_xy, std_xy = mn, std
-                break
-        else:
-            raise ValueError(f"Unrecognized dataset for file name: {file_name}")
+        # Find the matching dataset statistics based on the file name
+        mean_xy, std_xy, scale_factor = dataset_stats(file_name)
 
         # Evaluate each agent's trajectories
         for ag in range(samples.shape[1]):
