@@ -2,6 +2,7 @@ import torch
 import os
 import time
 import yaml
+import random
 import argparse
 import numpy as np
 from statistics import mean
@@ -66,7 +67,7 @@ def main(config):
     seq_length=config['model']['seq_length']
     hist_length=config['model']['hist_length']
     dim_size=config['model']['dim_size']
-
+    
     # Initialize the model:
     # Note that parameter initialization is done within the model constructor
     model_class = load_model(config['model']['module'], config['model']['class'])
@@ -124,8 +125,14 @@ def main(config):
     logging.info(f"{model_name} Sampling time: {avg_sampling_time:.2f} s")
         
     # Sample trajectories from testset:
+    scale_factor = 100             
+    dataset_stats = {
+        'av2': ([2677.9026, 1098.3357], [3185.974, 1670.7698]),
+        'waymo': ([1699.1744, 305.3823], [5284.104, 6511.814]),
+        'nuscenes': ([998.90979829, 1372.90628199], [539.07656177, 463.67307649])
+    } 
     metrics_testset = []
-    for scenario in sorted(os.listdir(config['data']['test_dir']))[:config['data']['subset_size']]:
+    for scenario in random.sample(sorted(os.listdir(config['data']['test_dir']), config['data']['subset_size'])):
         data = np.load(os.path.join(config['data']['test_dir'], scenario))
         data = torch.tensor(data[:max_num_agents, :, :dim_size], dtype=torch.float32).to(device)        
         data = data.unsqueeze(0).expand(config['sample']['num_sampling'], data.size(0), data.size(1), data.size(2))
@@ -155,7 +162,15 @@ def main(config):
         data_future = data[:, :, hist_length-1:, :].cpu().numpy()   # (N, L_seq_length + 1, D)
         epsilon, num_timesteps, kind = 0.1, seq_length*2, 'linear'
         FD_scenario, ATDD_scenario, ADE_scenario, FDE_scenario  = [], [], [], []
-        
+
+        # Find the matching dataset stats based on the file name
+        for dataset_name, (mn, std) in dataset_stats.items():
+            if dataset_name in file_name:
+                mean_xy, std_xy = mn, std
+                break
+        else:
+            raise ValueError(f"Unrecognized dataset for file name: {file_name}")
+
         # Evaluate each agent's trajectories
         for ag in range(samples.shape[1]):
             metrics = []
@@ -168,6 +183,9 @@ def main(config):
                 valid_agent_future = agent_future[(agent_future[:, 0] != 0.0) & (agent_future[:, 1] != 0.0)]              
                 # Evaluate each agent's sampled trajectory
                 if valid_agent_gen.shape[0] > 1 and valid_agent_future.shape[0] > 1:
+                    # unscale and unstanderdize
+                    valid_agent_future = (valid_agent_future / scale_factor) * std_xy + mean_xy 
+                    valid_agent_gen = (valid_agent_gen / scale_factor) * std_xy + mean_xy
                     metrics.append(evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps, kind))           
             if metrics != []:
                 # Unpack metrics and store the average

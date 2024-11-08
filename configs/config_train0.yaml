@@ -1,5 +1,5 @@
 data:
-  train_dir: "/data/tii/data/autod/train_s100"
+  train_dir: "/data/tii/data/merged/train"
   subset_size: 3200
 
 train:

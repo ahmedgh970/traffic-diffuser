@@ -1,6 +1,6 @@
 data:
-  train_dir: "/data/tii/data/autod/train_s10"
-  subset_size: 3200
+  train_dir: "/data/tii/data/merged/train"
+  subset_size: 6400
 
 train:
   results_dir: "results"
@@ -10,8 +10,8 @@ train:
   global_batch_size: 32
   global_seed: 0
   num_workers: 4
-  log_every: 100
-  ckpt_every: 100_000
+  log_every: 200
+  ckpt_every: 200_000
   seed: 0
 
 model:
