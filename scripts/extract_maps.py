@@ -113,26 +113,33 @@ def extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_ti
 
 
 def main():
-    dataset_path = '/data/tii/data/nuscenes/pkl'
-    output_dir = '/data/tii/data/nuscenes/maps'
-    _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
-    
-    for scenario_name in scenario_ids:
-        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=10000, num_timesteps_out=128)
+    #dataset_path = '/data/tii/data/nuscenes/pkl'
+    #output_dir = '/data/tii/data/nuscenes/maps'
+    #_, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
+    #
+    #for scenario_name in scenario_ids:
+    #    extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=10000, num_timesteps_out=128)
+#
+    #dataset_path = '/data/tii/data/waymo/pkl'
+    #output_dir = '/data/tii/data/waymo/maps'
+    #_, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
+    #
+    #for scenario_name in scenario_ids:
+    #    extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)    
 
-    dataset_path = '/data/tii/data/waymo/pkl'
-    output_dir = '/data/tii/data/waymo/maps'
-    _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
-    
-    for scenario_name in scenario_ids:
-        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)    
-
-    dataset_path = '/data/tii/data/argoverse/pkl'
+    dataset_path = '/data/tii/data/argoverse/pkl/train_pkl'
     output_dir = '/data/tii/data/argoverse/maps'
     _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
     
     for scenario_name in scenario_ids:
-        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)           
+        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)
+
+    dataset_path = '/data/tii/data/argoverse/pkl/val_pkl'
+    output_dir = '/data/tii/data/argoverse/maps'
+    _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
+    
+    for scenario_name in scenario_ids:
+        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)            
 
 if __name__ == "__main__":
     main()

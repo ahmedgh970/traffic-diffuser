@@ -9,7 +9,7 @@ sample:
   seed: 0
 
 model:
-  ckpt: "results/TrafficDiffuser-S-config_train0/checkpoints/0400000.pt"
+  ckpt: "results/001-TrafficDiffuser-S/checkpoints/0800000.pt"
   module: "models.backbones.model_td"
   class: "TrafficDiffuser_models"
   name: "TrafficDiffuser-S"

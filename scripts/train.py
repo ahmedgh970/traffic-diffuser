@@ -158,7 +158,11 @@ def main(config):
         logger.info(f"{model_name} Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Setup optimizer:
-    opt = torch.optim.AdamW(model.parameters(), lr=float(config['train']['learning_rate']), weight_decay=0)
+    opt = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(config['train']['learning_rate']),
+        weight_decay=0,    # set to 1e-5 if you need L2 regularization (in case of overfitting)
+    )
     
     # Prepare models for training:
     model.train()
