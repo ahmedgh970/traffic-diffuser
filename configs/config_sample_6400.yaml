@@ -4,12 +4,12 @@ data:
 
 sample:
   num_sampling: 100
-  num_sampling_steps: 1000
+  num_sampling_steps: 500
   cuda_device: 0
   seed: 0
 
 model:
-  ckpt: "results/001-TrafficDiffuser-S/checkpoints/0800000.pt"
+  ckpt: "results/TrafficDiffuser-S-6400/checkpoints/0800000.pt"
   module: "models.backbones.model_td"
   class: "TrafficDiffuser_models"
   name: "TrafficDiffuser-S"

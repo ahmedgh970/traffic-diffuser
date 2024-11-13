@@ -1,12 +1,13 @@
-torch
-torchvision
-torchaudio
-numpy
-tqdm
-scikit-learn
-Pillow
-einops
-timm
-diffusers
-accelerate
-fvcore
+# for mgps
+
+transformers
+
+lpips
+
+omegaconf
+
+lightning
+
+taming-transformers-rom1504
+
+hydra-core
