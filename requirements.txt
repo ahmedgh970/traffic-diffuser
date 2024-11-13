@@ -1,13 +1,18 @@
-# for mgps
-
+torch
+torchvision
 transformers
-
+diffusers[torch]
 lpips
-
+Pillow
+numpy
+scikit-learn
+matplotlib
+tqdm
 omegaconf
-
+tqdm
+PyYAML
+einops
 lightning
-
 taming-transformers-rom1504
-
 hydra-core
+pandas
