@@ -131,7 +131,7 @@ def main():
     output_dir = '/data/tii/data/argoverse/maps'
     _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
     
-    for scenario_name in scenario_ids:
+    for scenario_name in scenario_ids[115725:]:
         extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)
 
     dataset_path = '/data/tii/data/argoverse/pkl/val_pkl'
