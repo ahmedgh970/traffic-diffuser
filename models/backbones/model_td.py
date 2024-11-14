@@ -7,7 +7,7 @@ from models.backbones.layers import modulate, AdaTransformer
 
 
 #################################################################################
-#               Embedding Layer for Timesteps                                   #
+#                   Embedding Layer for Timesteps                               #
 #################################################################################
 class TimestepEmbedder(nn.Module):
     """

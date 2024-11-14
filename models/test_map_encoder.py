@@ -8,7 +8,7 @@ from fvcore.nn import FlopCountAnalysis
 
 class MapEmbedderSwinTiny(nn.Module):
     """
-    Map encoding as context to condition the TrafficDiffuser using Swin Transformer Tiny.
+    Map encoding  as context to condition the TrafficDiffuser using Swin Transformer Tiny.
     """
     def __init__(self, map_channels, hidden_size):
         super().__init__()

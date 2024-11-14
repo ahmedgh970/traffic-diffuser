@@ -41,7 +41,7 @@ model = TrafficDiffuser_models[model_name](
     use_map_embed=use_map_embed,
     use_ckpt_wrapper=use_ckpt_wrapper,
 ).to(device)
-#model.eval() #
+#model.eval() 
 
 # Print model parameters, and summary
 print(f"{model_name} Parameters: {sum(p.numel() for p in model.parameters()):,}")

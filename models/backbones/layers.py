@@ -112,7 +112,7 @@ class Attention(nn.Module):
 
 
 class Mlp(nn.Module):
-    """ MLP as used in Vision Transformer, MLP-Mixer and related networks
+    """ MLP as used in Vision  Transformer, MLP-Mixer and related networks
     """
     def __init__(
             self,
