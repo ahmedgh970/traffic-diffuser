@@ -10,6 +10,7 @@ def interpolate_to_fixed_length(trajectory, num_timesteps, kind):
     trajectory (np.ndarray): Input trajectory of shape (L, 2), where L is the number of timesteps.
     num_timesteps (int): The number of timesteps to interpolate to (default is 10).
     kind: choose from 'linear', 'quadratic', 'cubic'.
+    
     Returns:
     np.ndarray: Interpolated trajectory of shape (num_timesteps, 2).
     """

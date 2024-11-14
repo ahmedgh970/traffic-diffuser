@@ -21,7 +21,7 @@ def calculate_diff_distance_traveled(trajectory1, trajectory2):
 
 def calculate_frechet_distance(trajectory1, trajectory2):
     """
-    Calculate the Frechet Distance between two trajectories.
+    Calculate the Frechet Distance between two  trajectories.
 
     Parameters:
     trajectory1 (np.ndarray): Ground truth trajectory of shape (L, 2).
