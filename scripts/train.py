@@ -161,7 +161,7 @@ def main(config):
     opt = torch.optim.AdamW(
         model.parameters(),
         lr=float(config['train']['learning_rate']),
-        weight_decay=float(config['train']['weight_decay'])
+        weight_decay=float(config['train']['weight_decay']),
     )
     
     # Prepare models for training:
