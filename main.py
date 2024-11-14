@@ -1,5 +1,4 @@
 import os
-import sys
 
 if __name__ == '__main__':
     
@@ -10,5 +9,5 @@ if __name__ == '__main__':
     #os.system("accelerate launch --num-processes=1 --gpu_ids 1 -m scripts.train --config configs/config_train.yaml")
 
     # Sample
-    #os.system("python -m scripts.sample --config configs/config_sample.yaml")
+    os.system("python -m scripts.sample --config configs/config_sample.yaml")
     
