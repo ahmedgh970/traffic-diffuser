@@ -9,4 +9,3 @@ matplotlib
 tqdm
 PyYAML
 einops
-pandas

@@ -38,6 +38,7 @@ traffic-diffuser-main/
 ├── scripts/                           # Scripts for running tasks
 │     ├── sample.py                    # Sampling script
 │     ├── train.py                     # Training script
+|     ├── extract_norm_maps.py         # Map extract and normalization script
 |     └── data_processing.ipynb        # Data processing notebook
 ├── utils/                             # Utility functions and helper scripts
 │     ├── interpolate.py               # Helper function for traj interpolation
