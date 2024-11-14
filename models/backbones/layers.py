@@ -2,7 +2,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 import numpy as np
-from timm.models.layers import to_2tuple
+from timm.layers import to_2tuple
 from einops import rearrange, repeat
 
 

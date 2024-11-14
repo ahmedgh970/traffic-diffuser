@@ -56,7 +56,6 @@ def slice_array_based_on_condition(arr, epsilon):
     return slices
 
 
-
 def extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm, num_timesteps_out):
     scenario = read_scenario(dataset_path=dataset_path, mapping=mapping, scenario_file_name=scenario_name)
     print(f'Map of the scenario {scenario_name} is being processed...')
@@ -112,34 +111,65 @@ def extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_ti
     print(f'Scenario map of shape {arr_map.shape} and id "{scenario_name}" has been saved!')
 
 
-def main():
-    #dataset_path = '/data/tii/data/nuscenes/pkl'
-    #output_dir = '/data/tii/data/nuscenes/maps'
-    #_, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
-    #
-    #for scenario_name in scenario_ids:
-    #    extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=10000, num_timesteps_out=128)
-#
-    #dataset_path = '/data/tii/data/waymo/pkl'
-    #output_dir = '/data/tii/data/waymo/maps'
-    #_, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
-    #
-    #for scenario_name in scenario_ids:
-    #    extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)    
+def standardize_scale(input_dir, output_dir, mean, std, scale_factor):
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Standardize each scenario map
+    for filename in os.listdir(input_dir):
+        file_path = os.path.join(input_dir, filename)
+        scenario = np.load(file_path)
 
-    dataset_path = '/data/tii/data/argoverse/pkl/train_pkl'
-    output_dir = '/data/tii/data/argoverse/maps'
+        # Standardize scenario map
+        scenario = (scenario - mean) / std
+        
+        # Scale scenario map
+        scenario = scenario * scale_factor
+        
+        # Save processed scenario
+        output_path = os.path.join(output_dir, filename)
+        np.save(output_path, scenario)
+        print(f'Scenario map {filename} standardized, scaled, and saved.')
+    print("Processing complete.")
+
+    
+
+def main():
+    dataset_path = '/data/tii/data/nuscenes/pkl'
+    output_dir = '/data/tii/data/nuscenes/maps'
+    mean, std = [998.90979829, 1372.90628199], [539.07656177, 463.67307649]
     _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
     
-    for scenario_name in scenario_ids[115725:]:
-        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)
-
+    for scenario_name in scenario_ids:
+        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=50000, num_timesteps_out=128)
+    
+    standardize_scale(output_dir, output_dir, mean, std, scale_factor=100)
+    
+    dataset_path = '/data/tii/data/waymo/pkl'
+    output_dir = '/data/tii/data/waymo/maps'
+    mean, std = [1699.1744,  305.3823], [5284.104, 6511.814]
+    _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
+    
+    for scenario_name in scenario_ids:
+        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=50000, num_timesteps_out=128)    
+    
+    standardize_scale(output_dir, output_dir, mean, std, scale_factor=100)
+    
+    dataset_path = '/data/tii/data/argoverse/pkl/train_pkl'
+    output_dir = '/data/tii/data/argoverse/maps'
+    mean, std = [2677.9026, 1098.3357], [3185.974,  1670.7698]
+    _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
+    
+    for scenario_name in scenario_ids:
+        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=50000, num_timesteps_out=128)
+        
     dataset_path = '/data/tii/data/argoverse/pkl/val_pkl'
     output_dir = '/data/tii/data/argoverse/maps'
     _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
     
     for scenario_name in scenario_ids:
-        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=5000, num_timesteps_out=128)            
-
+        extract_process_map(scenario_name, mapping, dataset_path, output_dir, num_timesteps_interm=50000, num_timesteps_out=128)            
+    
+    standardize_scale(output_dir, output_dir, mean, std, scale_factor=100)
+    
 if __name__ == "__main__":
     main()

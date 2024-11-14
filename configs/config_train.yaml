@@ -1,17 +1,18 @@
 data:
   train_dir: "/data/tii/data/merged/train"
-  subset_size: 6400
+  subset_size: 51_200
 
 train:
   results_dir: "results"
   epochs: 4000
   diffusion_steps: 1000
   learning_rate: 1e-4
+  weight_decay: 0       # set to 1e-5 if you need L2 regularization (in case of overfitting)
   global_batch_size: 32
   global_seed: 0
   num_workers: 4
-  log_every: 200
-  ckpt_every: 200_000
+  log_every: 1600
+  ckpt_every: 1600_000
   seed: 0
 
 model:
