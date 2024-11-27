@@ -1,6 +1,7 @@
 from functools import partial
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from timm.layers import to_2tuple
 from einops import rearrange, repeat
@@ -11,8 +12,117 @@ def modulate(x, shift, scale):
     # x: (B, N, H), shift: (B, H), scale: (B, H)
     # Broadcasted addition and multiplication
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)   # (B, N, H) 
-    
-    
+
+
+class AdaTransformerDec(nn.Module):
+    """
+    A Transformer block with adaptive layer norm zero (adaLN-Zero) conditioning
+    """
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
+        super().__init__()
+        self.num_heads = num_heads
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        
+        self.attn = Attention(dim=hidden_size, num_heads=num_heads)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        
+        self.cattn = CrossAttentionLayer(embed_dim=hidden_size, num_heads=num_heads, dropout=0.1)
+        self.norm3 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6) 
+        
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 9 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, c, cm, mask=None):
+        # [(B*N, L, H), (B*N, H)]
+        shift_msa, scale_msa, gate_msa, shift_mca, scale_mca, gate_mca, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(9, dim=1)
+        # Self-Attention
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), mask=mask)       # (B*N, L, H)
+        # Cross-Attention
+        x = x + gate_mca.unsqueeze(1) * self.cattn(modulate(self.norm2(x), shift_mca, scale_mca), cm, mask=mask)  # (B*N, L, H)
+        # Mlp/Gmlp
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm3(x), shift_mlp, scale_mlp))                   # (B*N, L, H)
+        return x
+        
+
+class CrossAttentionLayer(nn.Module):
+    """
+    Cross-Attention Layer: Computes attention between a query and context (key-value pair).
+    """
+    def __init__(self, embed_dim, num_heads, dropout=0.1):
+        """
+        Args:
+            embed_dim: Dimension of the embeddings.
+            num_heads: Number of attention heads.
+            dropout: Dropout rate for attention scores.
+        """
+        super(CrossAttentionLayer, self).__init__()
+        assert embed_dim % num_heads == 0, "Embed dimension must be divisible by the number of heads."
+        
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        
+        # Linear projections for query, key, and value
+        self.query_proj = nn.Linear(embed_dim, embed_dim)
+        self.key_proj = nn.Linear(embed_dim, embed_dim)
+        self.value_proj = nn.Linear(embed_dim, embed_dim)
+        
+        # Output projection
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        
+        # Dropout for attention weights
+        self.attn_dropout = nn.Dropout(dropout)
+
+    def forward(self, query, context, mask=None):
+        """
+        Forward pass of the cross-attention layer.
+        
+        Args:
+            query: Tensor of shape (batch_size, query_len, embed_dim).
+            context: Tensor of shape (batch_size, context_len, embed_dim).
+            mask: Optional tensor of shape (batch_size, query_len, context_len) to mask out invalid attention scores.
+        
+        Returns:
+            Tensor of shape (batch_size, query_len, embed_dim) with attended features.
+        """
+        B, Q_len, _ = query.size()
+        _, C_len, _ = context.size()
+        
+        # Linear projections
+        Q = self.query_proj(query)  # (B, Q_len, embed_dim)
+        K = self.key_proj(context)  # (B, C_len, embed_dim)
+        V = self.value_proj(context)  # (B, C_len, embed_dim)
+        
+        # Reshape for multi-head attention
+        Q = Q.view(B, Q_len, self.num_heads, self.head_dim).transpose(1, 2)  # (B, num_heads, Q_len, head_dim)
+        K = K.view(B, C_len, self.num_heads, self.head_dim).transpose(1, 2)  # (B, num_heads, C_len, head_dim)
+        V = V.view(B, C_len, self.num_heads, self.head_dim).transpose(1, 2)  # (B, num_heads, C_len, head_dim)
+        
+        # Scaled dot-product attention
+        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)  # (B, num_heads, Q_len, C_len)
+        
+        if mask is not None:
+            attn_scores = attn_scores.masked_fill(mask == 0, float('-inf'))
+        
+        attn_probs = F.softmax(attn_scores, dim=-1)  # (B, num_heads, Q_len, C_len)
+        attn_probs = self.attn_dropout(attn_probs)
+        
+        # Weighted sum of values
+        attended = torch.matmul(attn_probs, V)  # (B, num_heads, Q_len, head_dim)
+        
+        # Combine heads
+        attended = attended.transpose(1, 2).contiguous().view(B, Q_len, self.embed_dim)  # (B, Q_len, embed_dim)
+        
+        # Final output projection
+        output = self.out_proj(attended)  # (B, Q_len, embed_dim)
+        return output
+
+  
 class AdaTransformer(nn.Module):
     """
     A Transformer block with adaptive layer norm zero (adaLN-Zero) conditioning
