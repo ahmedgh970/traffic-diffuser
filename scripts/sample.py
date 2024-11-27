@@ -73,11 +73,10 @@ def evaluate_trajectory(gen_traj, gt_traj, num_timesteps=10, kind='linear'):
     gt_traj = interpolate(gt_traj, num_timesteps, kind)
     
     # Calculate metrics
-    FD = fd(gt_traj, gen_traj)
     ATDD = atdd(gt_traj, gen_traj)
     ADE = ade(gt_traj, gen_traj)
     FDE = fde(gt_traj, gen_traj)
-    return FD, ATDD, ADE, FDE
+    return ATDD, ADE, FDE
     
 
 
@@ -189,7 +188,7 @@ def main(config):
         # Scenario evaluation loop
         data_future = data[:, :, hist_length-1:, :].cpu().numpy()   # (N, L_seq_length + 1, D)
         epsilon, num_timesteps, kind = 0.1, seq_length*2, 'linear'
-        FD_scenario, ATDD_scenario, ADE_scenario, FDE_scenario  = [], [], [], []
+        ATDD_scenario, ADE_scenario, FDE_scenario  = [], [], []
 
         # Find the matching dataset statistics based on the file name
         mean_xy, std_xy, scale_factor = dataset_stats(filename)
@@ -212,29 +211,26 @@ def main(config):
                     metrics.append(evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps, kind))           
             if metrics != []:
                 # Unpack metrics and store the average
-                FD, ATDD, ADE, FDE = zip(*metrics)
+                ATDD, ADE, FDE = zip(*metrics)
                 # select average (mean) or minimum (min) by number of samples               
-                FD_scenario.append(mean(FD))
-                ATDD_scenario.append(mean(ATDD))
-                ADE_scenario.append(mean(ADE))
-                FDE_scenario.append(mean(FDE))
+                ATDD_scenario.append(min(ATDD))
+                ADE_scenario.append(min(ADE))
+                FDE_scenario.append(min(FDE))
         
         # Logging the results
-        if FD_scenario == []:
+        if ADE_scenario == []:
             logging.info(f"This evaluation is conducted for scenario {filename} and all the agent's sampled trajectories are NOT VALID !")
         else:
-            logging.info(f"This evaluation is conducted for scenario {filename} and involves averaging across all agents and samples:")
-            logging.info(f" - Frechet Distance (FD): {mean(FD_scenario)}")
+            logging.info(f"This evaluation is conducted for scenario {filename} and involves averaging across all agents:")
             logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD_scenario)}")
             logging.info(f" - Average Displacement Error (ADE): {mean(ADE_scenario)}")
             logging.info(f" - Final Displacement Error (FDE): {mean(FDE_scenario)} \n")
-            metrics_testset.append((mean(FD_scenario), mean(ATDD_scenario), mean(ADE_scenario), mean(FDE_scenario)))
+            metrics_testset.append((mean(ATDD_scenario), mean(ADE_scenario), mean(FDE_scenario)))
         print(f'===> Scenario {filename} evaluated !')
     
     # Logging the average result on the full testset
-    FD, ATDD, ADE, FDE = zip(*metrics_testset)
+    ATDD, ADE, FDE = zip(*metrics_testset)
     logging.info(f"The average evaluation results across all scenarios:")
-    logging.info(f" - Frechet Distance (FD): {mean(FD)}")
     logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD)}")
     logging.info(f" - Average Displacement Error (ADE): {mean(ADE)}")
     logging.info(f" - Final Displacement Error (FDE): {mean(FDE)} \n")
