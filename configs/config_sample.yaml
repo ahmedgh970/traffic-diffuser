@@ -1,5 +1,5 @@
 data:
-  test_dir: "/data/tii/data/merged/test"
+  test_dir: "/data/tii/data/merged/test_av2"
   subset_size: 640
 
 sample:
@@ -9,7 +9,7 @@ sample:
   seed: 0
 
 model:
-  ckpt: "results/TrafficDiffuser-S/checkpoints/0800000.pt"
+  ckpt: "/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/results/002-TrafficDiffuser-S/checkpoints/6400000.pt"
   module: "models.backbones.model_td"
   class: "TrafficDiffuser_models"
   name: "TrafficDiffuser-S"
