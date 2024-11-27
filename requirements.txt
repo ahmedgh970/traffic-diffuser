@@ -9,3 +9,5 @@ matplotlib
 tqdm
 PyYAML
 einops
+fvcore
+scikit-image
