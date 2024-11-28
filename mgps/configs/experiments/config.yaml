@@ -1,0 +1,13 @@
+defaults:
+  - sampler: mgps
+
+dataset: ffhq
+task: sr4
+std: 0.05
+nsamples: 1
+
+save_folder : "${dataset}/experiments/results/${task}/${sampler.name}"
+im_save_folder : "${dataset}/experiments/images/${task}/"
+device: cuda:0
+
+im_idx: "00018"
