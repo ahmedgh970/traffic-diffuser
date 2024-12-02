@@ -28,8 +28,10 @@ def extract_process_scenario(scenario_name, mapping, dataset_path, min_distance,
     tracks_data = np.array(tracks_list)
 
     # Sample tracks to fixed sequence length
+    print('original tracks shape:', tracks_data.shape)
     tracks_sampled = tracks_data[:, ::step, :]
-
+    print('sampled tracks shape:', tracks_sampled.shape)
+    
     # Remove stationary agents
     def calculate_traveled_distance(tracks):
         non_padded_mask = ~(np.all(tracks == 0.0, axis=2))
@@ -90,12 +92,12 @@ def main():
     Main pipeline for preprocessing scenarios, calculating dataset statistics,
     and standardizing/scaling tracks.
     """
-    dataset_path = 'path/to/converted/dataset/pkl'
-    output_path = 'path/to/processed/dataset/npy'
+    dataset_path = '/data/tii/data/waymo/pkl'
+    output_path = '/data/tii/data/waymo/npy'
     os.makedirs(output_path, exist_ok=True)
     
     min_distance = 4      # Empirically determined for all datasets
-    step = 9              # Depends on the original dataset scenario length
+    step = 16             # Depends on the original dataset scenario length
     scale_factor = 100    # Empirically determined for all datasets
 
     _, scenario_ids, mapping = read_dataset_summary(dataset_path)
@@ -105,8 +107,9 @@ def main():
         processed_scenario = extract_process_scenario(
             scenario_name, mapping, dataset_path, min_distance=min_distance, step=step
         )
-        np.save(os.path.join(output_path, scenario_name.replace('.pkl', '.npy')), processed_scenario)
-        print(f"Preprocessed and saved {scenario_name.replace('.pkl', '.npy')} with shape {processed_scenario.shape}")
+        if processed_scenario.shape[0] != 0:
+            np.save(os.path.join(output_path, scenario_name.replace('.pkl', '.npy')), processed_scenario)
+            print(f"Preprocessed and saved {scenario_name.replace('.pkl', '.npy')} with shape {processed_scenario.shape}")
     
     # Standardize and scale
     mean, std = calculate_dataset_statistics(output_path)
