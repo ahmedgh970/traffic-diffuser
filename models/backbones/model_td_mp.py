@@ -55,7 +55,7 @@ class MapEmbedder(nn.Module):
     """ 
     def __init__(self, map_ft, map_length, scene_length, interm_size, hidden_size):
         super().__init__()      
-        self.proj1 = nn.Linear(in_features=2, out_features=hidden_size, bias=True)
+        self.proj1 = nn.Linear(in_features=2, out_features=interm_size, bias=True)
         self.act1 = nn.SiLU()
         
         self.proj2 = nn.Linear(in_features=map_ft*map_length, out_features=scene_length, bias=True)
@@ -67,7 +67,7 @@ class MapEmbedder(nn.Module):
 
     def forward(self, x):
         # (B, N, S, Lm, D)
-        B, N, S, L, D = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
+        B, N, S, L, D = x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]
         x = x.reshape(B*N, S, L, D)     # (B*N, S, Lm, D)
         x = self.proj1(x)               # (B*N, S, Lm, K)
         x = self.act1(x)                # (B*N, S, Lm, K)
