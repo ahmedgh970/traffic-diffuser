@@ -65,7 +65,6 @@ class CustomDataset(Dataset):
         self.seq_length = seq_length
         self.dim_size = dim_size   
         self.data_files = sorted(os.listdir(data_path))
-        self.map_files = sorted(os.listdir(map_path))
 
     def __len__(self):
         return len(self.data_files)
@@ -78,11 +77,10 @@ class CustomDataset(Dataset):
         assert data_tensor.shape == (self.max_agent, self.hist_length + self.seq_length, self.dim_size), \
             f"Unexpected shape {data_tensor.shape} at index {idx}"
         
-        map_file = self.map_files[idx]
-        map_npy = np.load(os.path.join(self.map_path, map_file))
+        map_npy = np.load(os.path.join(self.map_path, data_file))
         map_npy = map_npy[:self.max_agent, :, :, :]
         map_tensor = torch.tensor(map_npy, dtype=torch.float32)
-        assert map_tensor.shape == (self.max_agent, 32, 128, self.dim_size), \
+        assert map_tensor.shape == (self.max_agent, 32, 128, 2), \
             f"Unexpected shape {map_tensor.shape} at index {idx}"
         return data_tensor, map_tensor
 

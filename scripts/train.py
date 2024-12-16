@@ -119,7 +119,7 @@ def main(config):
         seq_length=seq_length,
         dim_size=dim_size,
     )
-    dataset = get_subset_loader(dataset, subset_size=config['data']['subset_size'])
+    #dataset = get_subset_loader(dataset, subset_size=config['data']['subset_size'])
     loader = DataLoader(
         dataset,
         batch_size=int(config['train']['global_batch_size'] // accelerator.num_processes),
@@ -139,7 +139,9 @@ def main(config):
         seq_length=seq_length,
         hist_length=hist_length,
         dim_size=dim_size,
-        map_channels=config['model']['map_channels'],
+        map_ft=32,
+        map_length=128,
+        interm_size=64,
         use_map_embed=config['model']['use_map_embed'],
         use_ckpt_wrapper=config['model']['use_ckpt_wrapper'],
     ).to(device)
