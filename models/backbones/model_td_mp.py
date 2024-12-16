@@ -1,7 +1,6 @@
 import math
 import torch
 import torch.nn as nn
-import torchvision.models as models
 from models.backbones.layers import modulate, AdaTransformerDec
 
 
