@@ -1,7 +1,7 @@
 import torch
 import time
 from fvcore.nn import FlopCountAnalysis
-from backbones.model_td_mp import TrafficDiffuser_models
+from models.backbones.model_td_mp import TrafficDiffuser_models
 from fvcore.nn import FlopCountAnalysis
 from diffusion import create_diffusion
 
@@ -13,11 +13,11 @@ max_num_agents = 20
 hist_length = 8
 seq_length = 5
 dim_size = 2
-map_ft=32,
-map_length=128,
-interm_size=64,
-use_map_embed = False
-use_ckpt_wrapper = False
+map_ft=32
+map_length=128
+interm_size=64
+use_map_embed = True
+use_ckpt_wrapper = True
 
 num_sampling_steps = 100
 
@@ -44,7 +44,7 @@ model = TrafficDiffuser_models[model_name](
     use_map_embed=use_map_embed,
     use_ckpt_wrapper=use_ckpt_wrapper,
 ).to(device)
-#model.eval() 
+model.eval() 
 
 # Print model parameters, and summary
 print(f"{model_name} Parameters: {sum(p.numel() for p in model.parameters()):,}")

@@ -1,7 +1,7 @@
 import math
 import torch
 import torch.nn as nn
-from models.backbones.layers import modulate, AdaTransformerDec
+from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc
 
 
 
@@ -130,8 +130,14 @@ class TrafficDiffuser(nn.Module):
         depth,
         mlp_ratio=4.0,
     ):
-        super().__init__()
-        self.t_embedder = TimestepEmbedder(hidden_size)
+        super().__init__()  
+        self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
+        self.t_embedder = TimestepEmbedder(hidden_size)   
+        self.t_pos_embed = nn.Parameter(
+            torch.zeros(1, hist_length+seq_length, hidden_size), 
+            requires_grad=True,
+        ) 
+        
         if use_map_embed:
             self.m_embedder = MapEmbedder(
                 map_ft=map_ft,
@@ -140,16 +146,15 @@ class TrafficDiffuser(nn.Module):
                 interm_size=interm_size,
                 hidden_size=hidden_size,                
             )
-            
-        self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
-        
-        self.t_pos_embed = nn.Parameter(torch.zeros(1, hist_length+seq_length, hidden_size), requires_grad=True)
-        self.t_blocks = nn.ModuleList([
-            AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
-        
-        self.final_layer = FinalLayer(max_num_agents, hist_length+seq_length, dim_size, hidden_size) 
-        
+            self.t_blocks = nn.ModuleList([
+                AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            ])
+        else:
+            self.t_blocks = nn.ModuleList([
+                AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            ])            
+                 
+        self.final_layer = FinalLayer(max_num_agents, hist_length+seq_length, dim_size, hidden_size)   
         self.hist_length = hist_length
         self.use_map_embed = use_map_embed
         self.use_ckpt_wrapper = use_ckpt_wrapper
@@ -211,25 +216,39 @@ class TrafficDiffuser(nn.Module):
         
         ###################### Embedders ############################
         # (B, t_max=1000), (B, N, S, L_m, D)
-        c = self.t_embedder(t)                          # (B, H) ts for diff process
+        c = self.t_embedder(t)                          # (B, H)
         c = c.unsqueeze(1)                              # (B, 1, H)
         c = c.expand(B, N, H).contiguous()              # (B, N, H)
         c = c.reshape(B*N, H)                           # (B*N, H)
-        
-        if self.use_map_embed:
-            cm = self.m_embedder(m)                     # (B*N, L, H)
         #############################################################
         
         ################# Temporal Attention ########################
         # (B, N, L, H), (B*N, H)
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
         x = x + self.t_pos_embed                        # (B*N, L, H)
-        if self.use_ckpt_wrapper:
-            for block in self.t_blocks:
-                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c, cm, use_reentrant=False)
+        
+        if self.use_map_embed:
+            cm = self.m_embedder(m)                     # (B*N, L, H)
+
+            if self.use_ckpt_wrapper:
+                for block in self.t_blocks:
+                    x = torch.utils.checkpoint.checkpoint(
+                        self.ckpt_wrapper(block),
+                        x, c, cm, use_reentrant=False
+                    )
+            else:
+                for block in self.t_blocks:
+                    x = block(x, c, cm)                 # (B*N, L, H)
         else:
-            for block in self.t_blocks:
-                x = block(x, c, cm)                     # (B*N, L, H)
+            if self.use_ckpt_wrapper:
+                for block in self.t_blocks:
+                    x = torch.utils.checkpoint.checkpoint(
+                        self.ckpt_wrapper(block),
+                        x, c, use_reentrant=False
+                    )
+            else:
+                for block in self.t_blocks:
+                    x = block(x, c)                     # (B*N, L, H)
         #############################################################
         
         ##################### Final layer ###########################
