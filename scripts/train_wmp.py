@@ -80,7 +80,7 @@ class CustomDataset(Dataset):
         
         map_file = self.map_files[idx]
         map_npy = np.load(os.path.join(self.map_path, map_file))
-        map_npy = map_npy[:self.max_agent, :, :]
+        map_npy = map_npy[:self.max_agent, :, :, :]
         map_tensor = torch.tensor(map_npy, dtype=torch.float32)
         assert map_tensor.shape == (self.max_agent, 32, 128, self.dim_size), \
             f"Unexpected shape {map_tensor.shape} at index {idx}"
@@ -103,10 +103,10 @@ def main(config):
     device = accelerator.device
     
     # Initialize var from config file
-    max_num_agents=config['model']['max_num_agents']
-    seq_length=config['model']['seq_length']
-    hist_length=config['model']['hist_length']
-    dim_size=config['model']['dim_size']
+    max_num_agents = config['model']['max_num_agents']
+    seq_length = config['model']['seq_length']
+    hist_length = config['model']['hist_length']
+    dim_size = config['model']['dim_size']
     model_name = config['model']['name']
     results_dir = config['train']['results_dir']
     

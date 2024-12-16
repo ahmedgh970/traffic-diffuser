@@ -11,7 +11,7 @@ from datetime import datetime
 import importlib
 from fvcore.nn import FlopCountAnalysis
 from diffusion import create_diffusion
-from utils import atdd, fd, ade, fde, interpolate 
+from utils import atdd, ade, fde, interpolate 
 
 
 
@@ -73,10 +73,10 @@ def evaluate_trajectory(gen_traj, gt_traj, num_timesteps=10, kind='linear'):
     gt_traj = interpolate(gt_traj, num_timesteps, kind)
     
     # Calculate metrics
-    ATDD = atdd(gt_traj, gen_traj)
+    TDD = atdd(gt_traj, gen_traj)
     ADE = ade(gt_traj, gen_traj)
     FDE = fde(gt_traj, gen_traj)
-    return ATDD, ADE, FDE
+    return ADE, FDE, TDD
     
 
 
@@ -164,16 +164,19 @@ def main(config):
         os.makedirs(samples_dir)
     
     # Sample and evaluate scenarios from test_files
+    logging.info("The metrics are computed as the average over all agents within each scenario.\n")
     metrics_testset = []
+    idx = 1
+    num_sampling = config['sample']['num_sampling']
     for filename in test_files:
         data = np.load(os.path.join(config['data']['test_dir'], filename))
         data = torch.tensor(data[:max_num_agents, :, :dim_size], dtype=torch.float32).to(device)        
-        data = data.unsqueeze(0).expand(config['sample']['num_sampling'], data.size(0), data.size(1), data.size(2))
+        data = data.unsqueeze(0).expand(num_sampling, data.size(0), data.size(1), data.size(2))
         h = data[:, :, :hist_length, :]        
         model_kwargs = dict(h=h)
         
         # Create sampling noise:
-        x = torch.randn(config['sample']['num_sampling'], max_num_agents, seq_length, dim_size, device=device)
+        x = torch.randn(num_sampling, max_num_agents, seq_length, dim_size, device=device)
         
         # Sample trajectories:
         samples = diffusion.p_sample_loop(
@@ -183,12 +186,12 @@ def main(config):
         
         # Save sampled trajectories
         np.save(os.path.join(samples_dir, filename), samples)
-        print(f'===> Scenario {filename} sampled and saved !')
+        print(f'==> Scenario {filename} sampled and saved !')
         
         # Scenario evaluation loop
         data_future = data[:, :, hist_length-1:, :].cpu().numpy()   # (N, L_seq_length + 1, D)
         epsilon, num_timesteps, kind = 0.1, seq_length*2, 'linear'
-        ATDD_scenario, ADE_scenario, FDE_scenario  = [], [], []
+        ADE_scenario, FDE_scenario, TDD_scenario  = [], [], []
 
         # Find the matching dataset statistics based on the file name
         mean_xy, std_xy, scale_factor = dataset_stats(filename)
@@ -211,30 +214,33 @@ def main(config):
                     metrics.append(evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps, kind))           
             if metrics != []:
                 # Unpack metrics and store the average
-                ATDD, ADE, FDE = zip(*metrics)
+                ADE, FDE, TDD = zip(*metrics)
                 # select average (mean) or minimum (min) by number of samples               
-                ATDD_scenario.append(min(ATDD))
                 ADE_scenario.append(min(ADE))
                 FDE_scenario.append(min(FDE))
+                TDD_scenario.append(min(TDD))
         
         # Logging the results
-        if ADE_scenario == []:
-            logging.info(f"This evaluation is conducted for scenario {filename} and all the agent's sampled trajectories are NOT VALID !")
+        if ADE_scenario != []:
+            logging.info(f"{idx:05}- {filename}: minADE_{num_sampling}={mean(ADE_scenario):.3f}, minFDE_{num_sampling}={mean(FDE_scenario):.3f}, minTDD_{num_sampling}={mean(TDD_scenario):.3f}")
+            metrics_testset.append((mean(ADE_scenario), mean(FDE_scenario), mean(TDD_scenario)))
+            print(f'===> Scenario ({idx:05}) {filename} evaluated !')
         else:
-            logging.info(f"This evaluation is conducted for scenario {filename} and involves averaging across all agents:")
-            logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD_scenario)}")
-            logging.info(f" - Average Displacement Error (ADE): {mean(ADE_scenario)}")
-            logging.info(f" - Final Displacement Error (FDE): {mean(FDE_scenario)} \n")
-            metrics_testset.append((mean(ATDD_scenario), mean(ADE_scenario), mean(FDE_scenario)))
-        print(f'===> Scenario {filename} evaluated !')
+            logging.info(f"This evaluation is conducted for scenario {filename} and all the agent's sampled trajectories are NOT VALID !")
+            print(f'===> Scenario ({idx:05}) {filename} discarded !')       
+        idx += 1
+            
+        
     
     # Logging the average result on the full testset
-    ATDD, ADE, FDE = zip(*metrics_testset)
-    logging.info(f"The average evaluation results across all scenarios:")
-    logging.info(f" - Absolute Traveled Distance Difference (ATDD): {mean(ATDD)}")
-    logging.info(f" - Average Displacement Error (ADE): {mean(ADE)}")
-    logging.info(f" - Final Displacement Error (FDE): {mean(FDE)} \n")
-    print(f'===> End of sampling and evaluation.')
+    ADE_testset, FDE_testset, TDD_testset = zip(*metrics_testset)
+    logging.info(
+        f"\nThe average evaluation results across all scenarios:\n"
+        f"- Average minADE_{num_sampling}={mean(ADE_testset):.3f}\n"
+        f"- Average minFDE_{num_sampling}={mean(FDE_testset):.3f}\n"
+        f"- Average minTDD_{num_sampling}={mean(TDD_testset):.3f}"
+    )
+    print(f'====> End of sampling and evaluation.')
 
 
 if __name__ == "__main__":
