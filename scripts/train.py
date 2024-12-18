@@ -98,6 +98,11 @@ def main(config):
     seq_length=config['model']['seq_length']
     hist_length=config['model']['hist_length']
     dim_size=config['model']['dim_size']
+    map_ft=config['model']['map_ft']
+    map_length=config['model']['map_length']
+    interm_size=config['model']['interm_size']
+    use_map_embed=config['model']['use_map_embed']
+        
     model_name = config['model']['name']
     results_dir = config['train']['results_dir']
     
@@ -139,10 +144,10 @@ def main(config):
         seq_length=seq_length,
         hist_length=hist_length,
         dim_size=dim_size,
-        map_ft=32,
-        map_length=128,
-        interm_size=64,
-        use_map_embed=config['model']['use_map_embed'],
+        map_ft=map_ft,
+        map_length=map_length,
+        interm_size=interm_size,
+        use_map_embed=use_map_embed,
         use_ckpt_wrapper=config['model']['use_ckpt_wrapper'],
     ).to(device)
     

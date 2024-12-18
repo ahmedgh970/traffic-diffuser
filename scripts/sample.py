@@ -95,6 +95,10 @@ def main(config):
     seq_length=config['model']['seq_length']
     hist_length=config['model']['hist_length']
     dim_size=config['model']['dim_size']
+    map_ft=config['model']['map_ft']
+    map_length=config['model']['map_length']
+    interm_size=config['model']['interm_size']
+    use_map_embed=config['model']['use_map_embed']
     
     # Initialize the model:
     # Note that parameter initialization is done within the model constructor
@@ -105,8 +109,10 @@ def main(config):
         seq_length=seq_length,
         hist_length=hist_length,
         dim_size=dim_size,
-        map_channels=config['model']['map_channels'],
-        use_map_embed=config['model']['use_map_embed'],
+        map_ft=map_ft,
+        map_length=map_length,
+        interm_size=interm_size,
+        use_map_embed=use_map_embed,
         use_ckpt_wrapper=False,
     ).to(device)
     
@@ -132,7 +138,10 @@ def main(config):
     dummy_x = torch.randn(batch_size, max_num_agents, seq_length, dim_size, device=device)
     dummy_t = torch.randn(batch_size, device=device)
     dummy_h = torch.randn(batch_size, max_num_agents, hist_length, dim_size, device=device)
-    dummy_m = None
+    if use_map_embed:
+        dummy_m = torch.randn(batch_size, max_num_agents, map_ft, map_length, 2, device=device)
+    else: 
+        dummy_m = None
     flops = FlopCountAnalysis(model, (dummy_x, dummy_t, dummy_h, dummy_m))
     gflops = flops.total() / 1e9
     logging.info(f"{model_name} GFLOPs: {gflops:.4f}\n")
@@ -169,26 +178,52 @@ def main(config):
     idx = 1
     num_sampling = config['sample']['num_sampling']
     for filename in test_files:
+        # full data
         data = np.load(os.path.join(config['data']['test_dir'], filename))
         data = torch.tensor(data[:max_num_agents, :, :dim_size], dtype=torch.float32).to(device)        
         data = data.unsqueeze(0).expand(num_sampling, data.size(0), data.size(1), data.size(2))
-        h = data[:, :, :hist_length, :]        
-        model_kwargs = dict(h=h)
         
+        # history
+        h = data[:, :, :hist_length, :]
+        # for cfg        
+        h_null = torch.zeros_like(h, device=device)
+        h = torch.cat([h, h_null], 0)
+        #h = torch.cat([h, h], 0)
+        
+        # map
+        if use_map_embed:
+            mp = np.load(os.path.join(config['data']['map_dir'], filename))
+            mp = torch.tensor(mp[:max_num_agents, :, :, :], dtype=torch.float32).to(device)        
+            mp = mp.unsqueeze(0).expand(num_sampling, mp.size(0), mp.size(1), mp.size(2), mp.size(3))
+            # for cfg
+            mp_null = torch.zeros_like(mp, device=device)
+            mp = torch.cat([mp, mp_null], 0)
+            #mp = torch.cat([mp, mp], 0)
+        else:
+            mp = None
+                  
         # Create sampling noise:
         x = torch.randn(num_sampling, max_num_agents, seq_length, dim_size, device=device)
+        # for cfg
+        x = torch.cat([x, x], 0)
+ 
+        # kwargs
+        model_kwargs = dict(h=h, m=mp, cfg_scale=config['sample']['cfg_scale'])  
         
         # Sample trajectories:
         samples = diffusion.p_sample_loop(
-            model.forward, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            model.forward_with_cfg, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
         )
+        samples, _ = samples.chunk(2, dim=0)  # Remove null samples
         samples = samples.cpu().numpy()
         
         # Save sampled trajectories
         np.save(os.path.join(samples_dir, filename), samples)
         print(f'==> Scenario {filename} sampled and saved !')
         
-        # Scenario evaluation loop
+        #####################################
+        # Sampled scenario evaluation loop
+        #####################################
         data_future = data[:, :, hist_length-1:, :].cpu().numpy()   # (N, L_seq_length + 1, D)
         epsilon, num_timesteps, kind = 0.1, seq_length*2, 'linear'
         ADE_scenario, FDE_scenario, TDD_scenario  = [], [], []

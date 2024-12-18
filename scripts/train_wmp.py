@@ -105,6 +105,11 @@ def main(config):
     seq_length = config['model']['seq_length']
     hist_length = config['model']['hist_length']
     dim_size = config['model']['dim_size']
+    map_ft=config['model']['map_ft']
+    map_length=config['model']['map_length']
+    interm_size=config['model']['interm_size']
+    use_map_embed=config['model']['use_map_embed']
+    
     model_name = config['model']['name']
     results_dir = config['train']['results_dir']
     
@@ -147,10 +152,10 @@ def main(config):
         seq_length=seq_length,
         hist_length=hist_length,
         dim_size=dim_size,
-        map_ft=32,
-        map_length=128,
-        interm_size=64,
-        use_map_embed=config['model']['use_map_embed'],
+        map_ft=map_ft,
+        map_length=map_length,
+        interm_size=interm_size,
+        use_map_embed=use_map_embed,
         use_ckpt_wrapper=config['model']['use_ckpt_wrapper'],
     ).to(device)
     
@@ -190,11 +195,11 @@ def main(config):
     for epoch in range(num_epochs):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
-        for data, ft_map in loader:
+        for data, mp in loader:
             x = data[:, :, hist_length:, :].to(device)
             h = data[:, :, :hist_length, :].to(device)
-            ft_map = ft_map.to(device)
-            model_kwargs = dict(h=h, m=ft_map)
+            mp = mp.to(device)
+            model_kwargs = dict(h=h, m=mp)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
