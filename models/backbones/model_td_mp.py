@@ -60,13 +60,15 @@ class MapEmbedder(nn.Module):
         self.proj2 = nn.Linear(in_features=map_ft*map_length, out_features=scene_length, bias=True)
         self.act2 = nn.SiLU()
         
+        #self.attn = nn.MultiheadAttention(embed_dim=interm_size, num_heads=num_heads, batch_first=True)
+  
         # Final layernorm and projection
         self.norm_final = nn.LayerNorm(interm_size, elementwise_affine=False, eps=1e-6)
         self.proj_final = nn.Linear(interm_size, hidden_size, bias=True)
 
     def forward(self, x):
         # (B, N, S, Lm, D)
-        B, N, S, L, D = x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]
+        B, N, S, L, D = x.shape
         x = x.reshape(B*N, S, L, D)     # (B*N, S, Lm, D)
         x = self.proj1(x)               # (B*N, S, Lm, K)
         x = self.act1(x)                # (B*N, S, Lm, K)
@@ -76,6 +78,7 @@ class MapEmbedder(nn.Module):
         x = self.proj2(x)               # (B*N, K, L)
         x = self.act2(x)                # (B*N, K, L)
         x = x.permute(0, 2, 1)          # (B*N, L, K)
+        #x, _ = self.attn(x, x, x)       # (B*N, L, K)
         
         x = self.norm_final(x)          # (B*N, L, K)
         x = self.proj_final(x)          # (B*N, L, H)
@@ -90,9 +93,10 @@ class FinalLayer(nn.Module):
     The final layer of the TrafficDiffuser
     Used for adaLN, project x the to desired output size.
     """
-    def __init__(self, max_num_agents, seq_length, dim_size, hidden_size):
+    def __init__(self, max_num_agents, hist_length, seq_length, dim_size, hidden_size):
         super().__init__()
         self.max_num_agents = max_num_agents
+        self.hist_length = hist_length
         self.seq_length = seq_length
         self.dim_size = dim_size
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -104,10 +108,15 @@ class FinalLayer(nn.Module):
 
     def forward(self, x, c):
         # (B*N, L, H), (B*N, H)
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)                 # (B*N, H), (B*N, H)
-        x = modulate(self.norm_final(x), shift, scale)                          # (B*N, L, H)
-        x = self.linear(x)                                                      # (B*N, L, D)
-        x = x.reshape(-1, self.max_num_agents, self.seq_length, self.dim_size)  # (B, N, L, D)
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)     # (B*N, H), (B*N, H)
+        x = modulate(self.norm_final(x), shift, scale)              # (B*N, L, H)
+        x = self.linear(x)                                          # (B*N, L, D)
+        x = x.reshape(
+            -1, self.max_num_agents, 
+            self.hist_length + self.seq_length, 
+            self.dim_size,
+        )                                                           # (B, N, L, D)
+        x = x[:, :, self.hist_length:, :]                           # (B, N, L_x, D)
         return x
     
 class TrafficDiffuser(nn.Module):
@@ -154,8 +163,9 @@ class TrafficDiffuser(nn.Module):
                 AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
             ])            
                  
-        self.final_layer = FinalLayer(max_num_agents, hist_length+seq_length, dim_size, hidden_size)   
+        self.final_layer = FinalLayer(max_num_agents, hist_length, seq_length, dim_size, hidden_size)   
         self.hist_length = hist_length
+        self.max_num_agents = max_num_agents
         self.use_map_embed = use_map_embed
         self.use_ckpt_wrapper = use_ckpt_wrapper
         self.initialize_weights()
@@ -253,10 +263,23 @@ class TrafficDiffuser(nn.Module):
         
         ##################### Final layer ###########################
         # (B*N, L, H), (B*N, H)
-        x = self.final_layer(x, c)                      # (B, N, L, D)
+        x = self.final_layer(x, c)                      # (B, N, L_x, D)
         #############################################################
         
-        return x[:, :, self.hist_length:, :]
+        return x
+    
+    def forward_with_cfg(self, x, t, h, m, cfg_scale):
+        """
+        Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
+        """
+        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
+        half = x[: len(x) // 2]
+        combined = torch.cat([half, half], dim=0)
+        eps = self.forward(combined, t, h, m)
+        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
+        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+        eps = torch.cat([half_eps, half_eps], dim=0)
+        return eps
 
 
 #################################################################################
