@@ -90,6 +90,33 @@ class MapEmbedderEfficientNetB0(nn.Module):
         x = self.proj_final(x)          # (B, hidden_size)
         return x
 
+class RasterMapEmbedder(nn.Module):
+    """
+    Map encoding using EfficientNet-B0 as context to condition the TrafficDiffuser.
+    """ 
+    def __init__(self, max_num_agents, hidden_size):
+        super().__init__()      
+        # Load pretrained EfficientNet-B0
+        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        # Modify the first convolution layer to accept 4-channel input
+        self.efficientnet.features[0][0] = nn.Conv2d(4, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        # Remove the final fully connected layer
+        self.efficientnet = nn.Sequential(*list(self.efficientnet.children())[:-2])
+        # Final projection and normalization
+        self.norm_final = nn.LayerNorm(1280, elementwise_affine=False, eps=1e-6)
+        self.proj_final = nn.Linear(1280, hidden_size, bias=True)
+        self.max_num_agents = max_num_agents
+        
+    def forward(self, x):
+        # (B, C, H, W)
+        x = self.efficientnet(x)                                            # (B, 1280, 7, 7)
+        x = x.mean(dim=[2, 3])                                              # Global average pooling (B, 1280)
+        x = self.norm_final(x)                                              # (B, 1280)
+        x = self.proj_final(x)                                              # (B, hidden_size)
+        x = x.unsqueeze(1).unsqueeze(1)                                     # (B, 1, 1, hidden_size)
+        x = x.expand(x.size(0), self.max_num_agents, x.size(2), x.size(3))  # (B, N, 1, hidden_size)
+        x = x.reshape(-1, x.size(2), x.size(3))                             # (B*N, 1, hidden_size)
+        return x
 
 # Define a function to test inference time
 def test_inference_time(model, device, input_tensor, num_trials=100):
@@ -100,6 +127,7 @@ def test_inference_time(model, device, input_tensor, num_trials=100):
     with torch.no_grad():
         for _ in range(10):
             _ = model(input_tensor)
+            print(_.shape)
     
     # Measure time
     start_time = time.time()
@@ -118,6 +146,7 @@ def print_flops(model, input_tensor):
     print(f"FLOPs: {flops.total()}")
 
 # Test setup
+max_num_agents = 20
 map_channels = 4
 hidden_size = 128
 batch_size = 16
@@ -131,7 +160,9 @@ random_map_tensor = torch.randn(batch_size, map_channels, height, width).to(devi
 # Initialize the models
 model_swin = MapEmbedderSwinTiny(map_channels, hidden_size).to(device)
 model_convnext = MapEmbedderConvNeXtTiny(map_channels, hidden_size).to(device)
-model_efficientnet = MapEmbedderEfficientNetB0(map_channels, hidden_size).to(device)
+#model_efficientnet = MapEmbedderEfficientNetB0(map_channels, hidden_size).to(device)
+
+model_efficientnet = RasterMapEmbedder(max_num_agents, hidden_size).to(device)
 
 # Print the number of parameters
 print(f"Swin Transformer Tiny number of parameters: {sum(p.numel() for p in model_swin.parameters() if p.requires_grad)}")

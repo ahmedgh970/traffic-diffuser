@@ -1,6 +1,7 @@
 import math
 import torch
 import torch.nn as nn
+import torchvision.models as models
 from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc
 
 
@@ -84,6 +85,33 @@ class MapEmbedder(nn.Module):
         x = self.proj_final(x)          # (B*N, L, H)
         return x
 
+class RasterMapEmbedder(nn.Module):
+    """
+    Map encoding using EfficientNet-B0 as context to condition the TrafficDiffuser.
+    """ 
+    def __init__(self, max_num_agents, hidden_size):
+        super().__init__()      
+        # Load pretrained EfficientNet-B0
+        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        # Modify the first convolution layer to accept 4-channel input
+        self.efficientnet.features[0][0] = nn.Conv2d(4, 32, kernel_size=3, stride=2, padding=1, bias=False)
+        # Remove the final fully connected layer
+        self.efficientnet = nn.Sequential(*list(self.efficientnet.children())[:-2])
+        # Final projection and normalization
+        self.norm_final = nn.LayerNorm(1280, elementwise_affine=False, eps=1e-6)
+        self.proj_final = nn.Linear(1280, hidden_size, bias=True)
+        self.max_num_agents = max_num_agents
+        
+    def forward(self, x):
+        # (B, C, H, W)
+        x = self.efficientnet(x)                                            # (B, 1280, 7, 7)
+        x = x.mean(dim=[2, 3])                                              # Global average pooling (B, 1280)
+        x = self.norm_final(x)                                              # (B, 1280)
+        x = self.proj_final(x)                                              # (B, hidden_size)
+        x = x.unsqueeze(1).unsqueeze(1)                                     # (B, 1, 1, hidden_size)
+        x = x.expand(x.size(0), self.max_num_agents, x.size(2), x.size(3))  # (B, N, 1, hidden_size)
+        x = x.reshape(-1, x.size(2), x.size(3))                             # (B*N, 1, hidden_size)
+        return x
 
 #################################################################################
 #                       Core TrafficDiffuser Model                              #
@@ -148,11 +176,8 @@ class TrafficDiffuser(nn.Module):
         ) 
         
         if use_map_embed:
-            self.m_embedder = MapEmbedder(
-                map_ft=map_ft,
-                map_length=map_length,
-                scene_length=hist_length+seq_length,
-                interm_size=interm_size,
+            self.m_embedder = RasterMapEmbedder(
+                max_num_agents=max_num_agents,
                 hidden_size=hidden_size,                
             )
             self.t_blocks = nn.ModuleList([
@@ -214,7 +239,7 @@ class TrafficDiffuser(nn.Module):
         - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
         - h: (B, N, L_h, D) tensor of history agents where N:max_num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
-        - m: (B, N, S, L_m, D) tensor of the selected map features per agent. S is the number of selected map polylines
+        - m: (B, C, H, W) tensor of rasterized map
         """
         
         ##################### Cat and Proj ##########################
@@ -238,7 +263,7 @@ class TrafficDiffuser(nn.Module):
         x = x + self.t_pos_embed                        # (B*N, L, H)
         
         if self.use_map_embed:
-            cm = self.m_embedder(m)                     # (B*N, L, H)
+            cm = self.m_embedder(m)                     # (B*N, 1, H)
 
             if self.use_ckpt_wrapper:
                 for block in self.t_blocks:

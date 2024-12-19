@@ -28,7 +28,8 @@ dummy_x = torch.randn(batch_size, max_num_agents, seq_length, dim_size, device=d
 dummy_t = torch.randn(batch_size, device=device)
 dummy_h = torch.randn(batch_size, max_num_agents, hist_length, dim_size, device=device)
 if use_map_embed:
-    dummy_m = torch.randn(batch_size, max_num_agents, map_ft, map_length, dim_size, device=device)
+    #dummy_m = torch.randn(batch_size, max_num_agents, map_ft, map_length, dim_size, device=device)
+    dummy_m = torch.randn(batch_size, 4, 256, 256, device=device)
 else:
     dummy_m = None
             
