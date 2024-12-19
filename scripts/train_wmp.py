@@ -78,9 +78,12 @@ class CustomDataset(Dataset):
             f"Unexpected shape {data_tensor.shape} at index {idx}"
         
         map_npy = np.load(os.path.join(self.map_path, data_file))
-        map_npy = map_npy[:self.max_agent, :, :, :]
+        #map_npy = map_npy[:self.max_agent, :, :, :]
         map_tensor = torch.tensor(map_npy, dtype=torch.float32)
-        assert map_tensor.shape == (self.max_agent, 32, 128, 2), \
+        #assert map_tensor.shape == (self.max_agent, 32, 128, 2), \
+        #    f"Unexpected shape {map_tensor.shape} at index {idx}"
+        # for raster map
+        assert map_tensor.shape == (4, 256, 256), \
             f"Unexpected shape {map_tensor.shape} at index {idx}"
         return data_tensor, map_tensor
 

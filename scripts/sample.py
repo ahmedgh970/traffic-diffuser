@@ -133,35 +133,35 @@ def main(config):
     logging.info(f"{model_name} Parameters: {sum(p.numel() for p in model.parameters()):,}\n")
     logging.info(f"{model_name} Model summary:\n{model}\n")
     
-    # Print model flops
-    batch_size = 1 # to ensure flops and inference time are calculated for a single scenario
-    dummy_x = torch.randn(batch_size, max_num_agents, seq_length, dim_size, device=device)
-    dummy_t = torch.randn(batch_size, device=device)
-    dummy_h = torch.randn(batch_size, max_num_agents, hist_length, dim_size, device=device)
-    if use_map_embed:
-        dummy_m = torch.randn(batch_size, max_num_agents, map_ft, map_length, 2, device=device)
-    else: 
-        dummy_m = None
-    flops = FlopCountAnalysis(model, (dummy_x, dummy_t, dummy_h, dummy_m))
-    gflops = flops.total() / 1e9
-    logging.info(f"{model_name} GFLOPs: {gflops:.4f}\n")
-    
-    # Print model sampling time
-    model_kwargs = dict(h=dummy_h, m=dummy_m)
-    num_trials = 10
-    avg_sampling_time = 0
-    for _ in range(num_trials):
-        torch.cuda.synchronize()
-        tic = time.time()
-        samples = diffusion.p_sample_loop(
-                model.forward, dummy_x.shape, dummy_x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-        )
-        torch.cuda.synchronize()
-        toc = time.time()
-        avg_sampling_time += (toc - tic)
-    avg_sampling_time /= num_trials
-    logging.info(f"{model_name} Sampling time: {avg_sampling_time:.2f} s\n")
-    print('===> Sampling time calculated !')
+    ## Print model flops
+    #batch_size = 1 # to ensure flops and inference time are calculated for a single scenario
+    #dummy_x = torch.randn(batch_size, max_num_agents, seq_length, dim_size, device=device)
+    #dummy_t = torch.randn(batch_size, device=device)
+    #dummy_h = torch.randn(batch_size, max_num_agents, hist_length, dim_size, device=device)
+    #if use_map_embed:
+    #    dummy_m = torch.randn(batch_size, max_num_agents, map_ft, map_length, 2, device=device)
+    #else: 
+    #    dummy_m = None
+    #flops = FlopCountAnalysis(model, (dummy_x, dummy_t, dummy_h, dummy_m))
+    #gflops = flops.total() / 1e9
+    #logging.info(f"{model_name} GFLOPs: {gflops:.4f}\n")
+    #
+    ## Print model sampling time
+    #model_kwargs = dict(h=dummy_h, m=dummy_m)
+    #num_trials = 10
+    #avg_sampling_time = 0
+    #for _ in range(num_trials):
+    #    torch.cuda.synchronize()
+    #    tic = time.time()
+    #    samples = diffusion.p_sample_loop(
+    #            model.forward, dummy_x.shape, dummy_x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+    #    )
+    #    torch.cuda.synchronize()
+    #    toc = time.time()
+    #    avg_sampling_time += (toc - tic)
+    #avg_sampling_time /= num_trials
+    #logging.info(f"{model_name} Sampling time: {avg_sampling_time:.2f} s\n")
+    #print('===> Sampling time calculated !')
         
     # Choose a subset of scenarios from testset:            
     test_files = sorted(random.sample(sorted(os.listdir(config['data']['test_dir'])), config['data']['subset_size']))
@@ -186,14 +186,16 @@ def main(config):
         # history
         h = data[:, :, :hist_length, :]
         # for cfg        
-        h_null = torch.zeros_like(h, device=device)
-        h = torch.cat([h, h_null], 0)
-        #h = torch.cat([h, h], 0)
+        #h_null = torch.zeros_like(h, device=device)
+        #h = torch.cat([h, h_null], 0)
+        h = torch.cat([h, h], 0)
         
         # map
         if use_map_embed:
             mp = np.load(os.path.join(config['data']['map_dir'], filename))
-            mp = torch.tensor(mp[:max_num_agents, :, :, :], dtype=torch.float32).to(device)        
+            #mp = torch.tensor(mp[:max_num_agents, :, :, :], dtype=torch.float32).to(device)
+            # if raster map
+            mp = torch.tensor(mp, dtype=torch.float32).to(device) 
             mp = mp.unsqueeze(0).expand(num_sampling, mp.size(0), mp.size(1), mp.size(2), mp.size(3))
             # for cfg
             mp_null = torch.zeros_like(mp, device=device)
