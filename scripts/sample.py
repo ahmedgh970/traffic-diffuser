@@ -196,9 +196,9 @@ def main(config):
             #mp = torch.tensor(mp[:max_num_agents, :, :, :], dtype=torch.float32).to(device)
             # if raster map
             mp = torch.tensor(mp, dtype=torch.float32).to(device) 
-            mp = mp.unsqueeze(0).expand(num_sampling, mp.size(0), mp.size(1), mp.size(2), mp.size(3))
+            mp = mp.unsqueeze(0).expand(num_sampling, mp.size(0), mp.size(1), mp.size(2))
             # for cfg
-            mp_null = torch.zeros_like(mp, device=device)
+            mp_null = torch.ones_like(mp, device=device)
             mp = torch.cat([mp, mp_null], 0)
             #mp = torch.cat([mp, mp], 0)
         else:
