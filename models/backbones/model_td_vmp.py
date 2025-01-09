@@ -49,50 +49,42 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
-class RasterMapEmbedder(nn.Module):
+class MapEmbedder(nn.Module):
     """
-    Map encoding using EfficientNet-B0 to condition the TrafficDiffuser on raster map.
-    Also handles map dropout for classifier-free guidance.
+    Map encoding as context to condition the TrafficDiffuser.
     """ 
-    def __init__(self, max_num_agents, hidden_size, dropout_prob):
+    def __init__(self, map_ft, map_length, scene_length, interm_size, hidden_size):
         super().__init__()      
-        # Load pretrained EfficientNet-B0
-        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
-        # Modify the first convolution layer to accept 4-channel input
-        self.efficientnet.features[0][0] = nn.Conv2d(4, 32, kernel_size=3, stride=2, padding=1, bias=False)
-        # Remove the final fully connected layer
-        self.efficientnet = nn.Sequential(*list(self.efficientnet.children())[:-2])
-        # Final projection and normalization
-        self.norm_final = nn.LayerNorm(1280, elementwise_affine=False, eps=1e-6)
-        self.proj_final = nn.Linear(1280, hidden_size, bias=True)
-        self.max_num_agents = max_num_agents
-        # Drop ratio of raster maps for classifier-free guidance 
-        self.dropout_prob = dropout_prob
-
-    def token_drop(self, mp, force_drop_ids=None):
-        """
-        Drops mp to enable classifier-free guidance.
-        """
-        if force_drop_ids is None:
-            drop_ids = torch.rand(mp.shape[0], device=mp.device) < self.dropout_prob
-        else:
-            drop_ids = force_drop_ids == 1
-        mp[drop_ids] = torch.zeros(mp.shape[1], mp.shape[2], mp.shape[3], device=mp.device)
-        return mp
+        self.proj1 = nn.Linear(in_features=2, out_features=interm_size, bias=True)
+        self.act1 = nn.SiLU()
         
-    def forward(self, mp, train, force_drop_ids=None):
-        # (B, C, H, W)
-        use_dropout = self.dropout_prob > 0
-        if (train and use_dropout) or (force_drop_ids is not None):
-            mp = self.token_drop(mp, force_drop_ids)                            # (B, C, H, W)          
-        mp = self.efficientnet(mp)                                              # (B, 1280, 7, 7)
-        mp = mp.mean(dim=[2, 3])                                                # Global average pooling (B, 1280)
-        mp = self.norm_final(mp)                                                # (B, 1280)
-        mp = self.proj_final(mp)                                                # (B, hidden_size)
-        mp = mp.unsqueeze(1).unsqueeze(1)                                       # (B, 1, 1, hidden_size)
-        mp = mp.expand(mp.size(0), self.max_num_agents, mp.size(2), mp.size(3)) # (B, N, 1, hidden_size)
-        mp = mp.reshape(-1, mp.size(2), mp.size(3))                             # (B*N, 1, hidden_size)
-        return mp
+        self.proj2 = nn.Linear(in_features=map_ft*map_length, out_features=scene_length, bias=True)
+        self.act2 = nn.SiLU()
+        
+        #self.attn = nn.MultiheadAttention(embed_dim=interm_size, num_heads=num_heads, batch_first=True)
+  
+        # Final layernorm and projection
+        self.norm_final = nn.LayerNorm(interm_size, elementwise_affine=False, eps=1e-6)
+        self.proj_final = nn.Linear(interm_size, hidden_size, bias=True)
+
+    def forward(self, x):
+        # (B, N, S, Lm, D)
+        B, N, S, L, D = x.shape
+        x = x.reshape(B*N, S, L, D)     # (B*N, S, Lm, D)
+        x = self.proj1(x)               # (B*N, S, Lm, K)
+        x = self.act1(x)                # (B*N, S, Lm, K)
+        
+        x = x.reshape(B*N, S*L, -1)     # (B*N, S*Lm, K)
+        x = x.permute(0, 2, 1)          # (B*N, K, S*Lm)
+        x = self.proj2(x)               # (B*N, K, L)
+        x = self.act2(x)                # (B*N, K, L)
+        x = x.permute(0, 2, 1)          # (B*N, L, K)
+        #x, _ = self.attn(x, x, x)       # (B*N, L, K)
+        
+        x = self.norm_final(x)          # (B*N, L, K)
+        x = self.proj_final(x)          # (B*N, L, H)
+        return x
+
 
 #################################################################################
 #                       Core TrafficDiffuser Model                              #
@@ -147,7 +139,6 @@ class TrafficDiffuser(nn.Module):
         num_heads,
         depth,
         mlp_ratio=4.0,
-        map_dropout_prob=0.7,
     ):
         super().__init__()  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
@@ -158,10 +149,12 @@ class TrafficDiffuser(nn.Module):
         ) 
         
         if use_map_embed:
-            self.m_embedder = RasterMapEmbedder(
-                max_num_agents=max_num_agents,
-                hidden_size=hidden_size,
-                dropout_prob=map_dropout_prob,                
+            self.m_embedder = MapEmbedder(
+                map_ft=map_ft,
+                map_length=map_length,
+                scene_length=hist_length+seq_length,
+                interm_size=interm_size,
+                hidden_size=hidden_size,                
             )
             self.t_blocks = nn.ModuleList([
                 AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
@@ -222,7 +215,7 @@ class TrafficDiffuser(nn.Module):
         - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
         - h: (B, N, L_h, D) tensor of history agents where N:max_num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
-        - m: (B, C, H, W) tensor of rasterized map
+        - m: (B, N, S, L_m, D) tensor of the selected map features per agent. S is the number of selected map polylines
         """
         
         ##################### Cat and Proj ##########################
@@ -246,7 +239,7 @@ class TrafficDiffuser(nn.Module):
         x = x + self.t_pos_embed                        # (B*N, L, H)
         
         if self.use_map_embed:
-            cm = self.m_embedder(m, self.training)      # (B*N, 1, H)
+            cm = self.m_embedder(m)                     # (B*N, L, H)
 
             if self.use_ckpt_wrapper:
                 for block in self.t_blocks:
