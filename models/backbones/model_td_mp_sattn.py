@@ -144,7 +144,7 @@ class TrafficDiffuser(nn.Module):
         num_heads,
         depth,
         mlp_ratio=4.0,
-        map_dropout_prob=0.1,
+        map_dropout_prob=0.4,
     ):
         super().__init__()  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)

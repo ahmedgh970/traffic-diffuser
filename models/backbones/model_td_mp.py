@@ -147,7 +147,7 @@ class TrafficDiffuser(nn.Module):
         num_heads,
         depth,
         mlp_ratio=4.0,
-        map_dropout_prob=0.7,
+        map_dropout_prob=0.4,
     ):
         super().__init__()  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
@@ -281,7 +281,10 @@ class TrafficDiffuser(nn.Module):
         Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
-        half = x[: len(x) // 2]
+        half, half2 = x[: len(x) // 2], x[len(x) // 2:]
+        print(half.shape)
+        print(half2.shape)
+        print(f"{torch.equal(half, half2)}")
         combined = torch.cat([half, half], dim=0)
         eps = self.forward(combined, t, h, m)
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
