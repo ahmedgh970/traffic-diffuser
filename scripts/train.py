@@ -188,9 +188,11 @@ def main(config):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
         for data in loader:
+            B, N, L, _ = data.shape
+            mask = (data.sum(dim=-1) != 0).unsqueeze(2).repeat(1, 1, L, 1).view(B * N, L, L)
             x = data[:, :, hist_length:, :].to(device)
             h = data[:, :, :hist_length, :].to(device)
-            model_kwargs = dict(h=h)
+            model_kwargs = dict(h=h, mask=mask)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
