@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc
+from models.backbones.layers import modulate, AdaTemporalEnc
 
 
 
@@ -49,51 +49,6 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
-class RasterMapEmbedder(nn.Module):
-    """
-    Map encoding using EfficientNet-B0 to condition the TrafficDiffuser on raster map.
-    Also handles map dropout for classifier-free guidance.
-    """ 
-    def __init__(self, max_num_agents, hidden_size, dropout_prob):
-        super().__init__()      
-        # Load pretrained EfficientNet-B0
-        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
-        # Modify the first convolution layer to accept 4-channel input
-        self.efficientnet.features[0][0] = nn.Conv2d(4, 32, kernel_size=3, stride=2, padding=1, bias=False)
-        # Remove the final fully connected layer
-        self.efficientnet = nn.Sequential(*list(self.efficientnet.children())[:-2])
-        # Final projection and normalization
-        self.norm_final = nn.LayerNorm(1280, elementwise_affine=False, eps=1e-6)
-        self.proj_final = nn.Linear(1280, hidden_size, bias=True)
-        self.max_num_agents = max_num_agents
-        # Drop ratio of raster maps for classifier-free guidance 
-        self.dropout_prob = dropout_prob
-
-    def token_drop(self, mp, force_drop_ids=None):
-        """
-        Drops mp to enable classifier-free guidance.
-        """
-        if force_drop_ids is None:
-            drop_ids = torch.rand(mp.shape[0], device=mp.device) < self.dropout_prob
-        else:
-            drop_ids = force_drop_ids == 1
-        #mp[drop_ids] = torch.zeros(mp.shape[1], mp.shape[2], mp.shape[3], device=mp.device)
-        mp[drop_ids] = torch.full((mp.shape[1], mp.shape[2], mp.shape[3]), -1.0, device=mp.device)
-        return mp
-        
-    def forward(self, mp, train, force_drop_ids=None):
-        # (B, C, H, W)
-        use_dropout = self.dropout_prob > 0
-        if (train and use_dropout) or (force_drop_ids is not None):
-            mp = self.token_drop(mp, force_drop_ids)                            # (B, C, H, W)          
-        mp = self.efficientnet(mp)                                              # (B, 1280, 7, 7)
-        mp = mp.mean(dim=[2, 3])                                                # Global average pooling (B, 1280)
-        mp = self.norm_final(mp)                                                # (B, 1280)
-        mp = self.proj_final(mp)                                                # (B, hidden_size)
-        mp = mp.unsqueeze(1).unsqueeze(1)                                       # (B, 1, 1, hidden_size)
-        mp = mp.expand(mp.size(0), self.max_num_agents, mp.size(2), mp.size(3)) # (B, N, 1, hidden_size)
-        mp = mp.reshape(-1, mp.size(2), mp.size(3))                             # (B*N, 1, hidden_size)
-        return mp
 
 #################################################################################
 #                       Core TrafficDiffuser Model                              #
@@ -157,20 +112,10 @@ class TrafficDiffuser(nn.Module):
             torch.zeros(1, hist_length+seq_length, hidden_size), 
             requires_grad=True,
         ) 
-        
-        if use_map_embed:
-            self.m_embedder = RasterMapEmbedder(
-                max_num_agents=max_num_agents,
-                hidden_size=hidden_size,
-                dropout_prob=map_dropout_prob,                
-            )
-            self.t_blocks = nn.ModuleList([
-                AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-            ])
-        else:
-            self.t_blocks = nn.ModuleList([
-                AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-            ])            
+
+        self.t_blocks = nn.ModuleList([
+            AdaTemporalEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+        ])          
                  
         self.final_layer = FinalLayer(max_num_agents, hist_length, seq_length, dim_size, hidden_size)   
         self.hist_length = hist_length
@@ -180,14 +125,6 @@ class TrafficDiffuser(nn.Module):
         self.initialize_weights()
 
     def initialize_weights(self):
-        # Zero-out linear layers in map embedder:
-        #nn.init.constant_(self.m_embedder.proj1.weight, 0)
-        #nn.init.constant_(self.m_embedder.proj1.bias, 0)
-        #nn.init.constant_(self.m_embedder.proj2.weight, 0)
-        #nn.init.constant_(self.m_embedder.proj2.bias, 0)       
-        #nn.init.constant_(self.m_embedder.proj_final.weight, 0)
-        #nn.init.constant_(self.m_embedder.proj_final.bias, 0)
-        
         # Initialize transformer layers:
         def _basic_init(module):
             if isinstance(module, nn.Linear):
@@ -217,13 +154,13 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, h, m=None):
+    def forward(self, x, t, h, mask):
         """
         Forward pass of TrafficDiffuser.
         - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
         - h: (B, N, L_h, D) tensor of history agents where N:max_num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
-        - m: (B, C, H, W) tensor of rasterized map
+        - mask: (B*N, L_h+L_x, L_h+L_x) tensor of rasterized map
         """
         
         ##################### Cat and Proj ##########################
@@ -244,30 +181,16 @@ class TrafficDiffuser(nn.Module):
         ################# Temporal Attention ########################
         # (B, N, L, H), (B*N, H)
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
-        x = x + self.t_pos_embed                        # (B*N, L, H)
-        
-        if self.use_map_embed:
-            cm = self.m_embedder(m, self.training)      # (B*N, 1, H)
-
-            if self.use_ckpt_wrapper:
-                for block in self.t_blocks:
-                    x = torch.utils.checkpoint.checkpoint(
-                        self.ckpt_wrapper(block),
-                        x, c, cm, use_reentrant=False
-                    )
-            else:
-                for block in self.t_blocks:
-                    x = block(x, c, cm)                 # (B*N, L, H)
+        x = x + self.t_pos_embed                        # (B*N, L, H)            
+        if self.use_ckpt_wrapper:
+            for block in self.t_blocks:
+                x = torch.utils.checkpoint.checkpoint(
+                    self.ckpt_wrapper(block),
+                    x, c, mask, use_reentrant=False
+                )
         else:
-            if self.use_ckpt_wrapper:
-                for block in self.t_blocks:
-                    x = torch.utils.checkpoint.checkpoint(
-                        self.ckpt_wrapper(block),
-                        x, c, use_reentrant=False
-                    )
-            else:
-                for block in self.t_blocks:
-                    x = block(x, c)                     # (B*N, L, H)
+            for block in self.t_blocks:
+                x = block(x, c, mask)                   # (B*N, L, H)
         #############################################################
         
         ##################### Final layer ###########################
@@ -282,10 +205,7 @@ class TrafficDiffuser(nn.Module):
         Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
-        half, half2 = x[: len(x) // 2], x[len(x) // 2:]
-        print(half.shape)
-        print(half2.shape)
-        print(f"{torch.equal(half, half2)}")
+        half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
         eps = self.forward(combined, t, h, m)
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
