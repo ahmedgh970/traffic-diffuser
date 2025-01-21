@@ -1,6 +1,7 @@
 import math
 import torch
 import torch.nn as nn
+import numpy as np
 import torchvision.models as models
 from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc
 
@@ -49,41 +50,84 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
-class MapEmbedder(nn.Module):
-    """
-    Map encoding as context to condition the TrafficDiffuser.
-    """ 
-    def __init__(self, map_ft, map_length, scene_length, interm_size, hidden_size):
-        super().__init__()      
-        self.proj1 = nn.Linear(in_features=2, out_features=interm_size, bias=True)
-        self.act1 = nn.SiLU()
-        
-        self.proj2 = nn.Linear(in_features=map_ft*map_length, out_features=scene_length, bias=True)
-        self.act2 = nn.SiLU()
-        
-        #self.attn = nn.MultiheadAttention(embed_dim=interm_size, num_heads=num_heads, batch_first=True)
-  
-        # Final layernorm and projection
-        self.norm_final = nn.LayerNorm(interm_size, elementwise_affine=False, eps=1e-6)
-        self.proj_final = nn.Linear(interm_size, hidden_size, bias=True)
+def init(module, weight_init, bias_init, gain=1):
+    '''
+    This function provides weight and bias initializations for linear layers.
+    '''
+    weight_init(module.weight.data, gain=gain)
+    bias_init(module.bias.data)
+    return module
 
-    def forward(self, x):
-        # (B, N, S, Lm, D)
-        B, N, S, L, D = x.shape
-        x = x.reshape(B*N, S, L, D)     # (B*N, S, Lm, D)
-        x = self.proj1(x)               # (B*N, S, Lm, K)
-        x = self.act1(x)                # (B*N, S, Lm, K)
-        
-        x = x.reshape(B*N, S*L, -1)     # (B*N, S*Lm, K)
-        x = x.permute(0, 2, 1)          # (B*N, K, S*Lm)
-        x = self.proj2(x)               # (B*N, K, L)
-        x = self.act2(x)                # (B*N, K, L)
-        x = x.permute(0, 2, 1)          # (B*N, L, K)
-        #x, _ = self.attn(x, x, x)       # (B*N, L, K)
-        
-        x = self.norm_final(x)          # (B*N, L, K)
-        x = self.proj_final(x)          # (B*N, L, H)
-        return x
+class MapEncoderPtsMA(nn.Module):
+    '''
+    This class operates on the multi-agent road lanes provided as a tensor with shape
+    (B, num_agents, num_road_segs, num_pts_per_road_seg, k_attr+1)
+    '''
+    def __init__(self, hidden_size, map_attr=2, dropout=0.1, dropout_prob=0.3):
+        super(MapEncoderPtsMA, self).__init__()
+        self.dropout = dropout
+        self.dropout_prob = dropout_prob
+        self.hidden_size = hidden_size
+        init_ = lambda m: init(m, nn.init.xavier_normal_, lambda x: nn.init.constant_(x, 0), np.sqrt(2))
+
+        self.map_attr = map_attr
+
+        # Seed parameters for the map
+        self.map_seeds = nn.Parameter(torch.Tensor(1, 1, self.hidden_size), requires_grad=True)
+        nn.init.xavier_uniform_(self.map_seeds)
+
+        self.road_pts_lin = nn.Sequential(init_(nn.Linear(self.map_attr, self.hidden_size)))
+        self.road_pts_attn_layer = nn.MultiheadAttention(self.hidden_size, num_heads=8, dropout=self.dropout)
+        self.norm1 = nn.LayerNorm(self.hidden_size, eps=1e-5)
+        self.norm2 = nn.LayerNorm(self.hidden_size, eps=1e-5)
+        self.map_feats = nn.Sequential(
+            init_(nn.Linear(self.hidden_size, self.hidden_size*3)), nn.ReLU(), nn.Dropout(self.dropout),
+            init_(nn.Linear(self.hidden_size*3, self.hidden_size)),
+        )
+
+    def get_road_pts_mask(self, roads):
+        road_segment_mask = torch.sum(roads[:, :, :, :, -1], dim=3) == 0
+        road_pts_mask = (1.0 - roads[:, :, :, :, -1]).type(torch.BoolTensor).to(roads.device).view(-1, roads.shape[3])
+
+        # The next lines ensure that we do not obtain NaNs during training for missing agents or for empty roads.
+        road_pts_mask[:, 0][road_pts_mask.sum(-1) == roads.shape[3]] = False  # for empty agents
+        road_segment_mask[:, :, 0][road_segment_mask.sum(-1) == road_segment_mask.shape[2]] = False  # for empty roads
+        return road_segment_mask, road_pts_mask
+
+    def token_drop(self, roads):
+        """
+        Drops roads to enable classifier-free guidance.
+        """
+        drop_ids = torch.rand(roads.shape[0], device=roads.device) < self.dropout_prob
+        roads[drop_ids] = torch.full(roads.size()[1::], 0.0, device=roads.device)
+        return roads
+    
+    def forward(self, roads, train):
+        '''
+        :param roads: (B, M, S, P, k_attr+1)  where B is batch size, M is num_agents, S is num road segments, P is
+        num pts per road segment.
+        :return: embedded road segments with shape (S)
+        '''
+        if (train and self.dropout_prob > 0):
+            roads = self.token_drop(roads)          
+        B = roads.shape[0]
+        M = roads.shape[1]
+        S = roads.shape[2]
+        P = roads.shape[3]
+        road_segment_mask, road_pts_mask = self.get_road_pts_mask(roads)
+        road_pts_feats = self.road_pts_lin(roads[:, :, :, :, :self.map_attr]).view(B*M*S, P, -1).permute(1, 0, 2)
+
+        # Combining information from each road segment using attention with agent contextual embeddings as queries.
+        map_seeds = self.map_seeds.repeat(1, B * M * S, 1)
+        # agents_emb = agents_emb[-1].detach().unsqueeze(2).repeat(1, 1, S, 1).view(-1, self.hidden_size).unsqueeze(0)
+        road_seg_emb = self.road_pts_attn_layer(query=map_seeds, key=road_pts_feats, value=road_pts_feats,
+                                                key_padding_mask=road_pts_mask)[0]
+        road_seg_emb = self.norm1(road_seg_emb)
+        road_seg_emb2 = road_seg_emb + self.map_feats(road_seg_emb)
+        road_seg_emb2 = self.norm2(road_seg_emb2)
+        road_seg_emb = road_seg_emb2.view(B*M, S, -1)
+        road_segment_mask = road_segment_mask.view(B*M, -1)
+        return road_seg_emb # (B*num_ag, road_seg, hidden_size]
 
 
 #################################################################################
@@ -139,6 +183,7 @@ class TrafficDiffuser(nn.Module):
         num_heads,
         depth,
         mlp_ratio=4.0,
+        map_dropout_prob=0.3,
     ):
         super().__init__()  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
@@ -149,12 +194,10 @@ class TrafficDiffuser(nn.Module):
         ) 
         
         if use_map_embed:
-            self.m_embedder = MapEmbedder(
-                map_ft=map_ft,
-                map_length=map_length,
-                scene_length=hist_length+seq_length,
-                interm_size=interm_size,
-                hidden_size=hidden_size,                
+            self.m_embedder = MapEncoderPtsMA(
+                hidden_size=hidden_size,
+                map_attr=dim_size,
+                dropout_prob=map_dropout_prob,           
             )
             self.t_blocks = nn.ModuleList([
                 AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
@@ -239,7 +282,8 @@ class TrafficDiffuser(nn.Module):
         x = x + self.t_pos_embed                        # (B*N, L, H)
         
         if self.use_map_embed:
-            cm = self.m_embedder(m)                     # (B*N, L, H)
+            cm = self.m_embedder(
+                m, train=self.training)                 # (B*N, S, H)
 
             if self.use_ckpt_wrapper:
                 for block in self.t_blocks:
