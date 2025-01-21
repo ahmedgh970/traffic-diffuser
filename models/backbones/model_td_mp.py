@@ -1,8 +1,11 @@
 import math
+from typing import OrderedDict
+import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc
+from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc, SpatialSoftmax
+from torchvision.models import resnet18, resnet50
 
 
 
@@ -78,7 +81,7 @@ class RasterMapEmbedder(nn.Module):
         else:
             drop_ids = force_drop_ids == 1
         #mp[drop_ids] = torch.zeros(mp.shape[1], mp.shape[2], mp.shape[3], device=mp.device)
-        mp[drop_ids] = torch.full((mp.shape[1], mp.shape[2], mp.shape[3]), -1.0, device=mp.device)
+        mp[drop_ids] = torch.full((mp.shape[1], mp.shape[2], mp.shape[3]), 0.5, device=mp.device)
         return mp
         
     def forward(self, mp, train, force_drop_ids=None):
@@ -95,6 +98,117 @@ class RasterMapEmbedder(nn.Module):
         mp = mp.reshape(-1, mp.size(2), mp.size(3))                             # (B*N, 1, hidden_size)
         return mp
 
+class RasterizedMapEncoder(nn.Module):
+    """A basic image-based rasterized map encoder"""
+
+    def __init__(
+            self,
+            model_arch: str,
+            input_image_shape: tuple = (4, 256, 256),
+            feature_dim: int = None,
+            max_num_agents: int = 20,
+            use_spatial_softmax=False,
+            spatial_softmax_kwargs=None,
+            output_activation=nn.ReLU,
+            dropout_prob=0.3
+    ) -> None:
+        super().__init__()
+        self.model_arch = model_arch
+        self.num_input_channels = input_image_shape[0]
+        self._feature_dim = feature_dim
+        self.max_num_agents = max_num_agents
+        if output_activation is None:
+            self._output_activation = nn.Identity()
+        else:
+            self._output_activation = output_activation()
+            
+        # Drop ratio of raster maps for classifier-free guidance 
+        self.dropout_prob = dropout_prob
+
+        # configure conv backbone
+        if model_arch == "resnet18":    
+            self.map_model = resnet18()
+            out_h = int(math.ceil(input_image_shape[1] / 32.))
+            out_w = int(math.ceil(input_image_shape[2] / 32.))
+            self.conv_out_shape = (512, out_h, out_w)
+        elif model_arch == "resnet50":
+            self.map_model = resnet50()
+            out_h = int(math.ceil(input_image_shape[1] / 32.))
+            out_w = int(math.ceil(input_image_shape[2] / 32.))
+            self.conv_out_shape = (2048, out_h, out_w)
+        else:
+            raise NotImplementedError(f"Model arch {model_arch} unknown")
+
+        # configure spatial reduction pooling layer
+        if use_spatial_softmax:
+            pooling = SpatialSoftmax(
+                input_shape=self.conv_out_shape, **spatial_softmax_kwargs)
+            self.pool_out_dim = int(
+                np.prod(pooling.output_shape(self.conv_out_shape)))
+        else:
+            pooling = nn.AdaptiveAvgPool2d((1, 1))
+            self.pool_out_dim = self.conv_out_shape[0]
+
+        self.map_model.conv1 = nn.Conv2d(
+            self.num_input_channels, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
+        )
+        self.map_model.avgpool = pooling
+        if feature_dim is not None:
+            self.map_model.fc = nn.Linear(
+                in_features=self.pool_out_dim, out_features=feature_dim)
+        else:
+            self.map_model.fc = nn.Identity()
+
+    def output_shape(self, input_shape=None):
+        if self._feature_dim is not None:
+            return [self._feature_dim]
+        else:
+            return [self.pool_out_dim]
+
+    def feature_channels(self):
+        if self.model_arch in ["resnet18", "resnet34"]:
+            channels = OrderedDict({
+                "layer1": 64,
+                "layer2": 128,
+                "layer3": 256,
+                "layer4": 512,
+            })
+        else:
+            channels = OrderedDict({
+                "layer1": 256,
+                "layer2": 512,
+                "layer3": 1024,
+                "layer4": 2048,
+            })
+        return channels
+
+    def feature_scales(self):
+        return OrderedDict({
+            "layer1": 1/4,
+            "layer2": 1/8,
+            "layer3": 1/16,
+            "layer4": 1/32
+        })
+
+    def token_drop(self, map_inputs):
+        """
+        Drops map_inputs to enable classifier-free guidance.
+        """
+        drop_ids = torch.rand(map_inputs.shape[0], device=map_inputs.device) < self.dropout_prob
+        map_inputs[drop_ids] = torch.full(map_inputs.size()[1::], 0.5, device=map_inputs.device)
+        return map_inputs
+    
+    def forward(self, map_inputs, train) -> torch.Tensor:
+        if (train and self.dropout_prob > 0):
+            map_inputs = self.token_drop(map_inputs)                        # (B, C, H, W)
+        feat = self.map_model(map_inputs)                                   # (B, hidden_size)
+        feat = self._output_activation(feat)                                # (B, hidden_size)
+        feat = feat.unsqueeze(1).unsqueeze(1)                               # (B, 1, 1, hidden_size)
+        feat = feat.expand(-1, self.max_num_agents, 1, self._feature_dim)   # (B, N, 1, hidden_size)
+        feat = feat.reshape(-1, 1, self._feature_dim)                       # (B*N, 1, hidden_size)
+        return feat
+    
+    
 #################################################################################
 #                       Core TrafficDiffuser Model                              #
 #################################################################################
@@ -148,7 +262,7 @@ class TrafficDiffuser(nn.Module):
         num_heads,
         depth,
         mlp_ratio=4.0,
-        map_dropout_prob=0.4,
+        map_dropout_prob=0.3,
     ):
         super().__init__()  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
@@ -159,11 +273,19 @@ class TrafficDiffuser(nn.Module):
         ) 
         
         if use_map_embed:
-            self.m_embedder = RasterMapEmbedder(
+            #self.m_embedder = RasterMapEmbedder(
+            #    max_num_agents=max_num_agents,
+            #    hidden_size=hidden_size,
+            #    dropout_prob=map_dropout_prob,                
+            #)
+            self.m_embedder = RasterizedMapEncoder(
+                model_arch="resnet18",
+                input_image_shape=(4, 256, 256),
+                feature_dim=hidden_size,
                 max_num_agents=max_num_agents,
-                hidden_size=hidden_size,
-                dropout_prob=map_dropout_prob,                
-            )
+                output_activation=nn.ReLU,
+                dropout_prob=map_dropout_prob,
+            )            
             self.t_blocks = nn.ModuleList([
                 AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
             ])
@@ -247,7 +369,10 @@ class TrafficDiffuser(nn.Module):
         x = x + self.t_pos_embed                        # (B*N, L, H)
         
         if self.use_map_embed:
-            cm = self.m_embedder(m, self.training)      # (B*N, 1, H)
+            cm = self.m_embedder(
+                map_inputs=m, 
+                train=self.training
+            )                                           # (B*N, 1, H)
 
             if self.use_ckpt_wrapper:
                 for block in self.t_blocks:
@@ -282,18 +407,15 @@ class TrafficDiffuser(nn.Module):
         Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
-        half, half2 = x[: len(x) // 2], x[len(x) // 2:]
-        print(half.shape)
-        print(half2.shape)
-        print(f"{torch.equal(half, half2)}")
+        half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
         eps = self.forward(combined, t, h, m)
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)
         return eps
-
-
+    
+    
 #################################################################################
 #                          TrafficDiffuser Configs                              #
 #################################################################################

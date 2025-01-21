@@ -105,7 +105,8 @@ class TrafficDiffuser(nn.Module):
         mlp_ratio=4.0,
         map_dropout_prob=0.4,
     ):
-        super().__init__()  
+        super().__init__()
+        self.num_heads = num_heads  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)   
         self.t_pos_embed = nn.Parameter(
@@ -160,7 +161,7 @@ class TrafficDiffuser(nn.Module):
         - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
         - h: (B, N, L_h, D) tensor of history agents where N:max_num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
-        - mask: (B*N, L_h+L_x, L_h+L_x) tensor of rasterized map
+        - mask: (B*N*num_heads, L_h+L_x, L_h+L_x) tensor of rasterized map
         """
         
         ##################### Cat and Proj ##########################
@@ -200,14 +201,14 @@ class TrafficDiffuser(nn.Module):
         
         return x
     
-    def forward_with_cfg(self, x, t, h, m, cfg_scale):
+    def forward_with_cfg(self, x, t, h, mask, cfg_scale):
         """
         Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
-        eps = self.forward(combined, t, h, m)
+        eps = self.forward(combined, t, h, mask)
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)
