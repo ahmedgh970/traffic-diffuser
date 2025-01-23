@@ -1,9 +1,7 @@
 import math
 import torch
 import torch.nn as nn
-import torchvision.models as models
-from models.backbones.layers import modulate, AdaTemporalEnc
-
+from timm.layers import Mlp, GluMlp, GatedMlp
 
 
 #################################################################################
@@ -48,11 +46,48 @@ class TimestepEmbedder(nn.Module):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         t_emb = self.mlp(t_freq)
         return t_emb
-
+    
 
 #################################################################################
 #                       Core TrafficDiffuser Model                              #
 #################################################################################
+
+def modulate(x, shift, scale):
+    # x: (B, N, H), shift: (B, H), scale: (B, H)
+    # Broadcasted addition and multiplication
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)   # (B, N, H) 
+
+class AdaTemporalEnc(nn.Module):
+    """
+    A Transformer encoder block with adaptive layer norm zero (adaLN-Zero) conditioning
+    """
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
+        super().__init__()
+        self.num_heads = num_heads
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.mha = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, c, mask=None):
+        # [(B*N, L, H), (B*N, H), (B*N, L)]
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+        # Attention
+        x_mod = modulate(self.norm1(x), shift_msa, scale_msa)              # (B*N, L, H)
+        x_mod, _ = self.mha(x_mod, x_mod, x_mod, key_padding_mask=mask)    # (B*N, L, H)
+        x = x + gate_msa.unsqueeze(1) * x_mod                              # (B*N, L, H)
+        # Mlp/Gmlp
+        x_mod = modulate(self.norm2(x), shift_mlp, scale_mlp)              # (B*N, L, H)
+        x_mod = self.mlp(x_mod)                                            # (B*N, L, H)
+        x = x + gate_mlp.unsqueeze(1) * x_mod                              # (B*N, L, H)
+        return x
+    
 class FinalLayer(nn.Module):
     """
     The final layer of the TrafficDiffuser
@@ -94,34 +129,24 @@ class TrafficDiffuser(nn.Module):
         seq_length,
         hist_length,
         dim_size,
-        map_ft,
-        map_length,
-        interm_size,
-        use_map_embed,
         use_ckpt_wrapper,
         hidden_size,
         num_heads,
         depth,
         mlp_ratio=4.0,
-        map_dropout_prob=0.4,
     ):
         super().__init__()
-        self.num_heads = num_heads  
+        self.num_heads = num_heads  # only usefull for attn_mask in train_td script  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)   
         self.t_pos_embed = nn.Parameter(
             torch.zeros(1, hist_length+seq_length, hidden_size), 
             requires_grad=True,
-        ) 
-
+        )       
         self.t_blocks = nn.ModuleList([
             AdaTemporalEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])          
-                 
+        ])                        
         self.final_layer = FinalLayer(max_num_agents, hist_length, seq_length, dim_size, hidden_size)   
-        self.hist_length = hist_length
-        self.max_num_agents = max_num_agents
-        self.use_map_embed = use_map_embed
         self.use_ckpt_wrapper = use_ckpt_wrapper
         self.initialize_weights()
 
@@ -161,18 +186,18 @@ class TrafficDiffuser(nn.Module):
         - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
         - h: (B, N, L_h, D) tensor of history agents where N:max_num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
-        - mask: (B*N*num_heads, L_h+L_x, L_h+L_x) tensor of rasterized map
+        - mask: (B, N, L_h+L_x) tensor of key padding mask (to mask padded time steps)
         """
         
         ##################### Cat and Proj ##########################
         # (B, N, L_x, D), (B, N, L_h, D)
         x = torch.cat((h, x), dim=2)                    # (B, N, L, D)
         x = self.proj1(x)                               # (B, N, L, H)
-        B, N, L, H = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
+        B, N, L, H = x.shape
         #############################################################
         
         ###################### Embedders ############################
-        # (B, t_max=1000), (B, N, S, L_m, D)
+        # (B, t_max=1000)
         c = self.t_embedder(t)                          # (B, H)
         c = c.unsqueeze(1)                              # (B, 1, H)
         c = c.expand(B, N, H).contiguous()              # (B, N, H)
@@ -180,7 +205,7 @@ class TrafficDiffuser(nn.Module):
         #############################################################
         
         ################# Temporal Attention ########################
-        # (B, N, L, H), (B*N, H)
+        # (B, N, L, H), (B*N, H), (B*N, L)
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
         x = x + self.t_pos_embed                        # (B*N, L, H)            
         if self.use_ckpt_wrapper:
@@ -201,19 +226,6 @@ class TrafficDiffuser(nn.Module):
         
         return x
     
-    def forward_with_cfg(self, x, t, h, mask, cfg_scale):
-        """
-        Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
-        """
-        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
-        half = x[: len(x) // 2]
-        combined = torch.cat([half, half], dim=0)
-        eps = self.forward(combined, t, h, mask)
-        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
-        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-        eps = torch.cat([half_eps, half_eps], dim=0)
-        return eps
-
 
 #################################################################################
 #                          TrafficDiffuser Configs                              #

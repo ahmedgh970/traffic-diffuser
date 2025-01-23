@@ -1,11 +1,8 @@
 import math
-from typing import OrderedDict
-import numpy as np
 import torch
 import torch.nn as nn
-import torchvision.models as models
-from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc, SpatialSoftmax
-from torchvision.models import resnet18, resnet50
+import numpy as np
+from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc
 
 
 
@@ -52,163 +49,93 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
-class RasterMapEmbedder(nn.Module):
-    """
-    Map encoding using EfficientNet-B0 to condition the TrafficDiffuser on raster map.
-    Also handles map dropout for classifier-free guidance.
-    """ 
-    def __init__(self, max_num_agents, hidden_size, dropout_prob):
-        super().__init__()      
-        # Load pretrained EfficientNet-B0
-        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
-        # Modify the first convolution layer to accept 4-channel input
-        self.efficientnet.features[0][0] = nn.Conv2d(4, 32, kernel_size=3, stride=2, padding=1, bias=False)
-        # Remove the final fully connected layer
-        self.efficientnet = nn.Sequential(*list(self.efficientnet.children())[:-2])
-        # Final projection and normalization
-        self.norm_final = nn.LayerNorm(1280, elementwise_affine=False, eps=1e-6)
-        self.proj_final = nn.Linear(1280, hidden_size, bias=True)
-        self.max_num_agents = max_num_agents
-        # Drop ratio of raster maps for classifier-free guidance 
+def init(module, weight_init, bias_init, gain=1):
+    '''
+    This function provides weight and bias initializations for linear layers.
+    '''
+    weight_init(module.weight.data, gain=gain)
+    bias_init(module.bias.data)
+    return module
+
+class MapEncoderPts(nn.Module):
+    '''
+    This class operates on the multi-agent road lanes provided as a tensor with shape
+    (B, num_road_segs, num_pts_per_road_seg, k_attr)
+    '''
+    def __init__(self, hidden_size, num_agents, map_attr, 
+                 dropout=0.1, dropout_prob=0.25, 
+                 drop_fill_value=0.0
+        ):
+        super(MapEncoderPts, self).__init__()
+        self.num_agents = num_agents
+        self.map_attr = map_attr
+        self.dropout = dropout
         self.dropout_prob = dropout_prob
+        self.drop_fill_value = drop_fill_value
+        self.hidden_size = hidden_size
+        init_ = lambda m: init(m, nn.init.xavier_normal_, lambda x: nn.init.constant_(x, 0), np.sqrt(2))
 
-    def token_drop(self, mp, force_drop_ids=None):
-        """
-        Drops mp to enable classifier-free guidance.
-        """
-        if force_drop_ids is None:
-            drop_ids = torch.rand(mp.shape[0], device=mp.device) < self.dropout_prob
-        else:
-            drop_ids = force_drop_ids == 1
-        #mp[drop_ids] = torch.zeros(mp.shape[1], mp.shape[2], mp.shape[3], device=mp.device)
-        mp[drop_ids] = torch.full((mp.shape[1], mp.shape[2], mp.shape[3]), 0.5, device=mp.device)
-        return mp
-        
-    def forward(self, mp, train, force_drop_ids=None):
-        # (B, C, H, W)
-        use_dropout = self.dropout_prob > 0
-        if (train and use_dropout) or (force_drop_ids is not None):
-            mp = self.token_drop(mp, force_drop_ids)                            # (B, C, H, W)          
-        mp = self.efficientnet(mp)                                              # (B, 1280, 7, 7)
-        mp = mp.mean(dim=[2, 3])                                                # Global average pooling (B, 1280)
-        mp = self.norm_final(mp)                                                # (B, 1280)
-        mp = self.proj_final(mp)                                                # (B, hidden_size)
-        mp = mp.unsqueeze(1).unsqueeze(1)                                       # (B, 1, 1, hidden_size)
-        mp = mp.expand(mp.size(0), self.max_num_agents, mp.size(2), mp.size(3)) # (B, N, 1, hidden_size)
-        mp = mp.reshape(-1, mp.size(2), mp.size(3))                             # (B*N, 1, hidden_size)
-        return mp
+        # Seed parameters for the map
+        self.map_seeds = nn.Parameter(torch.Tensor(1, 1, self.hidden_size), requires_grad=True)
+        nn.init.xavier_uniform_(self.map_seeds)
 
-class RasterizedMapEncoder(nn.Module):
-    """A basic image-based rasterized map encoder"""
-
-    def __init__(
-            self,
-            model_arch: str,
-            input_image_shape: tuple = (4, 256, 256),
-            feature_dim: int = None,
-            max_num_agents: int = 20,
-            use_spatial_softmax=False,
-            spatial_softmax_kwargs=None,
-            output_activation=nn.ReLU,
-            dropout_prob=0.3
-    ) -> None:
-        super().__init__()
-        self.model_arch = model_arch
-        self.num_input_channels = input_image_shape[0]
-        self._feature_dim = feature_dim
-        self.max_num_agents = max_num_agents
-        if output_activation is None:
-            self._output_activation = nn.Identity()
-        else:
-            self._output_activation = output_activation()
-            
-        # Drop ratio of raster maps for classifier-free guidance 
-        self.dropout_prob = dropout_prob
-
-        # configure conv backbone
-        if model_arch == "resnet18":    
-            self.map_model = resnet18()
-            out_h = int(math.ceil(input_image_shape[1] / 32.))
-            out_w = int(math.ceil(input_image_shape[2] / 32.))
-            self.conv_out_shape = (512, out_h, out_w)
-        elif model_arch == "resnet50":
-            self.map_model = resnet50()
-            out_h = int(math.ceil(input_image_shape[1] / 32.))
-            out_w = int(math.ceil(input_image_shape[2] / 32.))
-            self.conv_out_shape = (2048, out_h, out_w)
-        else:
-            raise NotImplementedError(f"Model arch {model_arch} unknown")
-
-        # configure spatial reduction pooling layer
-        if use_spatial_softmax:
-            pooling = SpatialSoftmax(
-                input_shape=self.conv_out_shape, **spatial_softmax_kwargs)
-            self.pool_out_dim = int(
-                np.prod(pooling.output_shape(self.conv_out_shape)))
-        else:
-            pooling = nn.AdaptiveAvgPool2d((1, 1))
-            self.pool_out_dim = self.conv_out_shape[0]
-
-        self.map_model.conv1 = nn.Conv2d(
-            self.num_input_channels, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
+        self.road_pts_lin = nn.Sequential(init_(nn.Linear(self.map_attr, self.hidden_size)))
+        self.road_pts_attn_layer = nn.MultiheadAttention(self.hidden_size, num_heads=8, dropout=self.dropout)
+        self.norm1 = nn.LayerNorm(self.hidden_size, eps=1e-5)
+        self.norm2 = nn.LayerNorm(self.hidden_size, eps=1e-5)
+        self.map_feats = nn.Sequential(
+            init_(nn.Linear(self.hidden_size, self.hidden_size*3)), nn.ReLU(), nn.Dropout(self.dropout),
+            init_(nn.Linear(self.hidden_size*3, self.hidden_size)),
         )
-        self.map_model.avgpool = pooling
-        if feature_dim is not None:
-            self.map_model.fc = nn.Linear(
-                in_features=self.pool_out_dim, out_features=feature_dim)
-        else:
-            self.map_model.fc = nn.Identity()
 
-    def output_shape(self, input_shape=None):
-        if self._feature_dim is not None:
-            return [self._feature_dim]
-        else:
-            return [self.pool_out_dim]
-
-    def feature_channels(self):
-        if self.model_arch in ["resnet18", "resnet34"]:
-            channels = OrderedDict({
-                "layer1": 64,
-                "layer2": 128,
-                "layer3": 256,
-                "layer4": 512,
-            })
-        else:
-            channels = OrderedDict({
-                "layer1": 256,
-                "layer2": 512,
-                "layer3": 1024,
-                "layer4": 2048,
-            })
-        return channels
-
-    def feature_scales(self):
-        return OrderedDict({
-            "layer1": 1/4,
-            "layer2": 1/8,
-            "layer3": 1/16,
-            "layer4": 1/32
-        })
-
-    def token_drop(self, map_inputs):
+    def token_drop(self, roads, drop_fill_value):
         """
-        Drops map_inputs to enable classifier-free guidance.
+        Drops roads to enable classifier-free guidance.
         """
-        drop_ids = torch.rand(map_inputs.shape[0], device=map_inputs.device) < self.dropout_prob
-        map_inputs[drop_ids] = torch.full(map_inputs.size()[1::], 0.5, device=map_inputs.device)
-        return map_inputs
+        drop_ids = torch.rand(roads.shape[0], device=roads.device) < self.dropout_prob
+        roads[drop_ids] = torch.full(roads.size()[1:], drop_fill_value, device=roads.device)
+        return roads
     
-    def forward(self, map_inputs, train) -> torch.Tensor:
+    def forward(self, roads, train):
+        '''
+        :param roads: (B, S, P, k_attr) where B is batch size, N is max num agents, 
+                                              S is num road segments,
+                                              P is num pts per road segment.
+        :param train: boolean flag to indicate training mode
+        :return: embedded road segments with shape (S) (B*N, S, hidden_size]
+        '''
         if (train and self.dropout_prob > 0):
-            map_inputs = self.token_drop(map_inputs)                        # (B, C, H, W)
-        feat = self.map_model(map_inputs)                                   # (B, hidden_size)
-        feat = self._output_activation(feat)                                # (B, hidden_size)
-        feat = feat.unsqueeze(1).unsqueeze(1)                               # (B, 1, 1, hidden_size)
-        feat = feat.expand(-1, self.max_num_agents, 1, self._feature_dim)   # (B, N, 1, hidden_size)
-        feat = feat.reshape(-1, 1, self._feature_dim)                       # (B*N, 1, hidden_size)
-        return feat
-    
-    
+            roads = self.token_drop(roads, self.drop_fill_value)          
+        B, S, P = roads.shape[:3]
+        N = self.num_agents
+        
+        # Masking road points
+        road_pts_mask = torch.sum(roads, dim=-1) == 0  # Shape: (B, S, P)
+        road_pts_mask = road_pts_mask.type(torch.BoolTensor).to(roads.device).view(-1, roads.shape[2])
+        road_pts_mask[:, 0][road_pts_mask.sum(-1) == roads.shape[2]] = False
+        
+        # Project and reshape roads
+        # Combine information from each road segment using attention 
+        # with agent contextual embeddings as queries.
+        road_pts_feats = self.road_pts_lin(roads).view(B*S, P, -1).permute(1, 0, 2)
+        map_seeds = self.map_seeds.repeat(1, B*S, 1)
+        road_seg_emb = self.road_pts_attn_layer(
+            query=map_seeds,
+            key=road_pts_feats,
+            value=road_pts_feats,
+            key_padding_mask=road_pts_mask)[0]
+        
+        # Layer normalization, FFN, and residual connection
+        road_seg_emb = self.norm1(road_seg_emb)                         # (1, B*S, H)
+        road_seg_emb2 = road_seg_emb + self.map_feats(road_seg_emb)     # (1, B*S, H)
+        road_seg_emb2 = self.norm2(road_seg_emb2)                       # (1, B*S, H)
+        
+        # Reshape and expand to N agents
+        road_seg_emb = road_seg_emb2.view(B, S, -1)                     # (B, S, H)
+        road_seg_emb = road_seg_emb.unsqueeze(1)                        # (B, 1, S, H)
+        vmap_emb = road_seg_emb.expand(B, N, S, -1).view(B*N, S, -1)    # (B*N, S, H)
+        return vmap_emb                                             
+
 #################################################################################
 #                       Core TrafficDiffuser Model                              #
 #################################################################################
@@ -217,9 +144,9 @@ class FinalLayer(nn.Module):
     The final layer of the TrafficDiffuser
     Used for adaLN, project x the to desired output size.
     """
-    def __init__(self, max_num_agents, hist_length, seq_length, dim_size, hidden_size):
+    def __init__(self, num_agents, hist_length, seq_length, dim_size, hidden_size):
         super().__init__()
-        self.max_num_agents = max_num_agents
+        self.num_agents = num_agents
         self.hist_length = hist_length
         self.seq_length = seq_length
         self.dim_size = dim_size
@@ -236,7 +163,7 @@ class FinalLayer(nn.Module):
         x = modulate(self.norm_final(x), shift, scale)              # (B*N, L, H)
         x = self.linear(x)                                          # (B*N, L, D)
         x = x.reshape(
-            -1, self.max_num_agents, 
+            -1, self.num_agents, 
             self.hist_length + self.seq_length, 
             self.dim_size,
         )                                                           # (B, N, L, D)
@@ -249,20 +176,18 @@ class TrafficDiffuser(nn.Module):
     """
     def __init__(
         self,
-        max_num_agents,
+        num_agents,
         seq_length,
         hist_length,
         dim_size,
-        map_ft,
-        map_length,
-        interm_size,
         use_map_embed,
         use_ckpt_wrapper,
         hidden_size,
         num_heads,
         depth,
         mlp_ratio=4.0,
-        map_dropout_prob=0.3,
+        map_dropout_prob=0.25,
+        map_drop_fill_value=0.0,
     ):
         super().__init__()  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
@@ -273,19 +198,13 @@ class TrafficDiffuser(nn.Module):
         ) 
         
         if use_map_embed:
-            #self.m_embedder = RasterMapEmbedder(
-            #    max_num_agents=max_num_agents,
-            #    hidden_size=hidden_size,
-            #    dropout_prob=map_dropout_prob,                
-            #)
-            self.m_embedder = RasterizedMapEncoder(
-                model_arch="resnet18",
-                input_image_shape=(4, 256, 256),
-                feature_dim=hidden_size,
-                max_num_agents=max_num_agents,
-                output_activation=nn.ReLU,
+            self.m_embedder = MapEncoderPts(
+                hidden_size=hidden_size,
+                num_agents=num_agents,
+                map_attr=dim_size,
                 dropout_prob=map_dropout_prob,
-            )            
+                drop_fill_value=map_drop_fill_value,           
+            )
             self.t_blocks = nn.ModuleList([
                 AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
             ])
@@ -294,22 +213,12 @@ class TrafficDiffuser(nn.Module):
                 AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
             ])            
                  
-        self.final_layer = FinalLayer(max_num_agents, hist_length, seq_length, dim_size, hidden_size)   
-        self.hist_length = hist_length
-        self.max_num_agents = max_num_agents
+        self.final_layer = FinalLayer(num_agents, hist_length, seq_length, dim_size, hidden_size)   
         self.use_map_embed = use_map_embed
         self.use_ckpt_wrapper = use_ckpt_wrapper
         self.initialize_weights()
 
     def initialize_weights(self):
-        # Zero-out linear layers in map embedder:
-        #nn.init.constant_(self.m_embedder.proj1.weight, 0)
-        #nn.init.constant_(self.m_embedder.proj1.bias, 0)
-        #nn.init.constant_(self.m_embedder.proj2.weight, 0)
-        #nn.init.constant_(self.m_embedder.proj2.bias, 0)       
-        #nn.init.constant_(self.m_embedder.proj_final.weight, 0)
-        #nn.init.constant_(self.m_embedder.proj_final.bias, 0)
-        
         # Initialize transformer layers:
         def _basic_init(module):
             if isinstance(module, nn.Linear):
@@ -339,13 +248,14 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, h, m=None):
+    def forward(self, x, t, h, mask=None, mp=None):
         """
         Forward pass of TrafficDiffuser.
-        - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
+        - x: (B, N, L_x, D) tensor of agents where N:num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
-        - h: (B, N, L_h, D) tensor of history agents where N:max_num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
-        - m: (B, C, H, W) tensor of rasterized map
+        - h: (B, N, L_h, D) tensor of history agents where N:num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
+        - mask: (B, N, L_h+L_x) tensor of key padding mask (to mask padded time steps)
+        - mp: (B, S, L_m, D) tensor of the selected vector map. S is the number of selected segments, and L_m is the number of points per segment.
         """
         
         ##################### Cat and Proj ##########################
@@ -364,35 +274,33 @@ class TrafficDiffuser(nn.Module):
         #############################################################
         
         ################# Temporal Attention ########################
-        # (B, N, L, H), (B*N, H)
+        # (B, N, L, H), (B*N, H), (B, S, L_m, D)
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
         x = x + self.t_pos_embed                        # (B*N, L, H)
         
         if self.use_map_embed:
             cm = self.m_embedder(
-                map_inputs=m, 
-                train=self.training
-            )                                           # (B*N, 1, H)
+                mp, train=self.training)                # (B*N, S, H)
 
             if self.use_ckpt_wrapper:
                 for block in self.t_blocks:
                     x = torch.utils.checkpoint.checkpoint(
                         self.ckpt_wrapper(block),
-                        x, c, cm, use_reentrant=False
+                        x, c, cm, mask, use_reentrant=False
                     )
             else:
                 for block in self.t_blocks:
-                    x = block(x, c, cm)                 # (B*N, L, H)
+                    x = block(x, c, cm, mask)           # (B*N, L, H)
         else:
             if self.use_ckpt_wrapper:
                 for block in self.t_blocks:
                     x = torch.utils.checkpoint.checkpoint(
                         self.ckpt_wrapper(block),
-                        x, c, use_reentrant=False
+                        x, c, cm=None, mask=mask, use_reentrant=False
                     )
             else:
                 for block in self.t_blocks:
-                    x = block(x, c)                     # (B*N, L, H)
+                    x = block(x, c, cm=None, mask=mask) # (B*N, L, H)
         #############################################################
         
         ##################### Final layer ###########################
@@ -402,20 +310,20 @@ class TrafficDiffuser(nn.Module):
         
         return x
     
-    def forward_with_cfg(self, x, t, h, m, cfg_scale):
+    def forward_with_cfg(self, x, t, h, mask=None, mp=None, cfg_scale=4.0):
         """
         Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
-        eps = self.forward(combined, t, h, m)
+        eps = self.forward(combined, t, h, mask, mp)
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)
         return eps
-    
-    
+
+
 #################################################################################
 #                          TrafficDiffuser Configs                              #
 #################################################################################
