@@ -95,9 +95,6 @@ def main(config):
     seq_length=config['model']['seq_length']
     hist_length=config['model']['hist_length']
     dim_size=config['model']['dim_size']
-    map_ft=config['model']['map_ft']
-    map_length=config['model']['map_length']
-    interm_size=config['model']['interm_size']
     use_map_embed=config['model']['use_map_embed']
     
     # Initialize the model:
@@ -109,9 +106,6 @@ def main(config):
         seq_length=seq_length,
         hist_length=hist_length,
         dim_size=dim_size,
-        map_ft=map_ft,
-        map_length=map_length,
-        interm_size=interm_size,
         use_map_embed=use_map_embed,
         use_ckpt_wrapper=False,
     ).to(device)
@@ -139,7 +133,7 @@ def main(config):
     #dummy_t = torch.randn(batch_size, device=device)
     #dummy_h = torch.randn(batch_size, max_num_agents, hist_length, dim_size, device=device)
     #if use_map_embed:
-    #    dummy_m = torch.randn(batch_size, max_num_agents, map_ft, map_length, 2, device=device)
+    #    dummy_m = torch.randn(batch_size, 128, 128, 2, device=device)
     #else: 
     #    dummy_m = None
     #flops = FlopCountAnalysis(model, (dummy_x, dummy_t, dummy_h, dummy_m))
@@ -182,44 +176,43 @@ def main(config):
         data = np.load(os.path.join(config['data']['test_dir'], filename))
         data = torch.tensor(data[:max_num_agents, :, :dim_size], dtype=torch.float32).to(device)        
         data = data.unsqueeze(0).expand(num_sampling, data.size(0), data.size(1), data.size(2))
+        
+        # key padding mask of the padded time steps
         B, N, L, _ = data.shape
-        mask = (data.sum(dim=-1) != 0).unsqueeze(2).repeat(1, 1, L, 1).view(B * N, L, L)
-
+        key_padding_mask = (data.sum(dim=-1) == 0.0).view(B * N, L)
+        # for cfg        
+        key_padding_mask = torch.cat([key_padding_mask, key_padding_mask], 0)
+            
         # history
         h = data[:, :, :hist_length, :]
         # for cfg        
-        #h_null = torch.zeros_like(h, device=device)
-        #h = torch.cat([h, h_null], 0)
-        #h = torch.cat([h, h], 0)
+        h = torch.cat([h, h], 0)
         
         # map
         if use_map_embed:
             mp = np.load(os.path.join(config['data']['map_dir'], filename))
-            #mp = torch.tensor(mp[:max_num_agents, :, :, :], dtype=torch.float32).to(device)
-            # if raster map
-            mp = torch.tensor(mp, dtype=torch.float32).to(device) 
+            # if vector map
+            mp = torch.tensor(mp, dtype=torch.float32).to(device)
             mp = mp.unsqueeze(0).expand(num_sampling, mp.size(0), mp.size(1), mp.size(2))
             # for cfg
-            mp_null = torch.full_like(mp, -1.0, device=device)
+            mp_null = torch.full(mp.size(), 0.0, device=device)
             mp = torch.cat([mp, mp_null], 0)
-            #mp = torch.cat([mp, mp], 0)
         else:
             mp = None
                   
         # Create sampling noise:
         x = torch.randn(num_sampling, max_num_agents, seq_length, dim_size, device=device)
         # for cfg
-        #x = torch.cat([x, x], 0)
+        x = torch.cat([x, x], 0)
         
         # kwargs
-        #model_kwargs = dict(h=h, mp=mp, mask=mask, cfg_scale=config['sample']['cfg_scale'])  
-        model_kwargs = dict(h=h, mask=mask)
-                            
+        model_kwargs = dict(h=h, mask=None, mp=mp, cfg_scale=config['sample']['cfg_scale'])  
+        
         # Sample trajectories:
         samples = diffusion.p_sample_loop(
-            model.forward, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            model.forward_with_cfg, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
         )
-        #samples, _ = samples.chunk(2, dim=0)  # Remove null samples
+        samples, _ = samples.chunk(2, dim=0)  # Remove null samples
         samples = samples.cpu().numpy()
         
         # Save sampled trajectories
