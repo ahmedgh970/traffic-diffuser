@@ -57,10 +57,10 @@ def get_subset_loader(dataset, subset_size):
 #                                Dataset                                        #
 #################################################################################
 class CustomDataset(Dataset):
-    def __init__(self, data_path, map_path, max_agent, hist_length, seq_length, dim_size):
+    def __init__(self, data_path, map_path, num_agents, hist_length, seq_length, dim_size):
         self.data_path = data_path
         self.map_path = map_path
-        self.max_agent = max_agent
+        self.num_agents = num_agents
         self.hist_length = hist_length
         self.seq_length = seq_length
         self.dim_size = dim_size   
@@ -72,9 +72,9 @@ class CustomDataset(Dataset):
     def __getitem__(self, idx):      
         data_file = self.data_files[idx]
         data_npy = np.load(os.path.join(self.data_path, data_file))
-        data_npy = data_npy[:self.max_agent, :, :self.dim_size]
+        data_npy = data_npy[:self.num_agents, :, :self.dim_size]
         data_tensor = torch.tensor(data_npy, dtype=torch.float32)
-        assert data_tensor.shape == (self.max_agent, self.hist_length + self.seq_length, self.dim_size), \
+        assert data_tensor.shape == (self.num_agents, self.hist_length + self.seq_length, self.dim_size), \
             f"Unexpected shape {data_tensor.shape} at index {idx}"
         
         map_npy = np.load(os.path.join(self.map_path, data_file))
@@ -123,7 +123,7 @@ def main(config):
     dataset = CustomDataset(
         data_path=config['data']['train_dir'],
         map_path=config['data']['map_dir'],
-        max_agent=num_agents,
+        num_agents=num_agents,
         hist_length=hist_length,
         seq_length=seq_length,
         dim_size=dim_size,
@@ -239,7 +239,7 @@ def main(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/config_train.yaml")
+    parser.add_argument("--config", type=str, default="configs/config_train_gvmp.yaml")
     args = parser.parse_args()
     config = load_config(args.config)
     main(config)

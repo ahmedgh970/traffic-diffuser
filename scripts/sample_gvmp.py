@@ -91,7 +91,7 @@ def main(config):
     device = f"cuda:{config['sample']['cuda_device']}" if torch.cuda.is_available() else "cpu"
     
     # Initialize model args
-    max_num_agents=config['model']['max_num_agents']
+    num_agents=config['model']['num_agents']
     seq_length=config['model']['seq_length']
     hist_length=config['model']['hist_length']
     dim_size=config['model']['dim_size']
@@ -102,7 +102,7 @@ def main(config):
     model_class = load_model(config['model']['module'], config['model']['class'])
     model_name = config['model']['name']
     model = model_class[model_name](
-        max_num_agents=max_num_agents,
+        num_agents=num_agents,
         seq_length=seq_length,
         hist_length=hist_length,
         dim_size=dim_size,
@@ -129,9 +129,9 @@ def main(config):
     
     ## Print model flops
     #batch_size = 1 # to ensure flops and inference time are calculated for a single scenario
-    #dummy_x = torch.randn(batch_size, max_num_agents, seq_length, dim_size, device=device)
+    #dummy_x = torch.randn(batch_size, num_agents, seq_length, dim_size, device=device)
     #dummy_t = torch.randn(batch_size, device=device)
-    #dummy_h = torch.randn(batch_size, max_num_agents, hist_length, dim_size, device=device)
+    #dummy_h = torch.randn(batch_size, num_agents, hist_length, dim_size, device=device)
     #if use_map_embed:
     #    dummy_m = torch.randn(batch_size, 128, 128, 2, device=device)
     #else: 
@@ -174,7 +174,7 @@ def main(config):
     for filename in test_files:
         # full data
         data = np.load(os.path.join(config['data']['test_dir'], filename))
-        data = torch.tensor(data[:max_num_agents, :, :dim_size], dtype=torch.float32).to(device)        
+        data = torch.tensor(data[:num_agents, :, :dim_size], dtype=torch.float32).to(device)        
         data = data.unsqueeze(0).expand(num_sampling, data.size(0), data.size(1), data.size(2))
         
         # key padding mask of the padded time steps
@@ -201,7 +201,7 @@ def main(config):
             mp = None
                   
         # Create sampling noise:
-        x = torch.randn(num_sampling, max_num_agents, seq_length, dim_size, device=device)
+        x = torch.randn(num_sampling, num_agents, seq_length, dim_size, device=device)
         # for cfg
         x = torch.cat([x, x], 0)
         
@@ -278,7 +278,7 @@ def main(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/config_sample.yaml")
+    parser.add_argument("--config", type=str, default="configs/config_sample_gvmp.yaml")
     args = parser.parse_args()
     config = load_config(args.config)
     main(config)
