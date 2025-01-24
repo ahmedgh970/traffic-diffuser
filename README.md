@@ -17,7 +17,6 @@ TrafficDiffuser is a PyTorch-based implementation of a conditional trajectory ge
 ## Documentation
 * Refer to [ScenarioNet](https://github.com/metadriverse/scenarionet) to convert Nuscenes, Waymo, nuPlan, and Argoverse datasets into a unified dict format, which is required before training and evaluating TrafficDiffuser.
 * The diffusion process is modified from OpenAI's diffusion repos: [GLIDE](https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py), [ADM](https://github.com/openai/guided-diffusion/blob/main/guided_diffusion), and [IDDPM](https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py).
-* Refer to [Vim](https://github.com/hustvl/Vim), as the official implementation of the paper [Vision Mamba: Efficient Visual Representation Learning with Bidirectional State Space Model](https://arxiv.org/abs/2401.09417).
 
 ## Folder Structure
 ``` 
@@ -38,12 +37,12 @@ traffic-diffuser-main/
 ├── scripts/                           # Scripts for running tasks
 │     ├── sample.py                    # Sampling script
 │     ├── train.py                     # Training script
-|     ├── extract_norm_maps.py         # Map extract and normalization script
-|     └── data_processing.ipynb        # Data processing notebook
+|     ├── process_tracks.py            # Scenario processing script
+|     ├── process_maps.py              # Map processing script
+|     └── process_closest_maps.py      # Closest map processing script
 ├── utils/                             # Utility functions and helper scripts
 │     ├── interpolate.py               # Helper function for traj interpolation
 │     ├── metrics.py                   # Evaluation metrics functions
-|     ├── visualization.ipynb          # Visualization notebook
 │     └── __init__.py                  # Makes utils a package
 ├── main.py                            # Main file to run train and sample
 ├── requirements.txt                   # Project dependencies
@@ -79,7 +78,7 @@ pip install -e .
 ```
 
 ## Data Processing
-First, convert and merge the original datasets (nuscenes, waymo, etc.) into unified dictionary-formatted pickle files using ScenarioNet. Next, preprocess these pickle files to generate the data and map directories in the required format. Lastly, complete the data processing pipeline to obtain the final rasterized maps, along with the final training and testing scenarios. Follow the [`process_dataset.ipynb`](process_dataset.ipynb) notebook to perform these three data processing steps on nuScenes and Waymo.
+First, convert and merge the original datasets (nuscenes, waymo, etc.) into unified dictionary-formatted pickle files using ScenarioNet. Next, preprocess these pickle files to generate the track and map directories in the required format. Follow the [`process_tracks.py`](scripts/process_tracks.py), [`process_maps.py`](scripts/process_maps.py), and [`process_closest_maps.py`](scripts/process_closest_maps.py) to perform the data processing steps on the desired datasets.
 
 
 ## Training
@@ -102,17 +101,15 @@ To sample trajectories from a pretrained TrafficDiffuser model, run:
 python -m scripts.sample --config configs/config_sample.yaml
 ```
 
-The sampling results are automatically saved in the model's designated results directory, organized within the samples subfolder for easy access. Additionally, evaluation metrics such as FD (Fréchet Distance), ADE (Average Displacement Error), and others are logged for each test scenarios. The evaluation log file alse include the model summary, number of parameters, FLOPs, and inference runtime.
+The sampling results are automatically saved in the model's designated results directory, organized within the samples subfolder for easy access. Additionally, evaluation metrics such as ADE (Average Displacement Error), FDE (Final Displacement Error), and TDD (Traveled Distance Difference). The evaluation log file alse include the model summary, number of parameters, FLOPs, and inference runtime.
 
 An example of the evaluation log file results:
 ```bash
 ...
-The average evaluation results across all scenarios:
- - Frechet Distance (FD): 2.3737549884231917
- - Absolute Traveled Distance Difference (ATDD): 1.7922132715630574
- - Polygone Area (PA): 3.3179398003974447
- - Average Displacement Error (ADE): 1.2074199433614015
- - Final Displacement Error (FDE): 2.364478100013666
+The average evaluation results across test scenarios with :
+- Average minADE_50=1.654
+- Average minFDE_50=3.416
+- Average minTDD_50=1.476
 ```
 
 #### Visualization of test scenarios 4, 7 and 18:
