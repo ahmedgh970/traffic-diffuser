@@ -94,7 +94,7 @@ def main(config):
     device = accelerator.device
     
     # Initialize var from config file
-    max_num_agents=config['model']['max_num_agents']
+    num_agents=config['model']['num_agents']
     seq_length=config['model']['seq_length']
     hist_length=config['model']['hist_length']
     dim_size=config['model']['dim_size']
@@ -114,7 +114,7 @@ def main(config):
     # Setup Dataloader
     dataset = CustomDataset(
         data_path=config['data']['train_dir'],
-        max_agent=max_num_agents,
+        max_agent=num_agents,
         hist_length=hist_length,
         seq_length=seq_length,
         dim_size=dim_size,
@@ -135,13 +135,12 @@ def main(config):
     # Note that parameter initialization is done within the model constructor
     model_class = load_model(config['model']['module'], config['model']['class'])
     model = model_class[model_name](
-        max_num_agents=max_num_agents,
+        num_agents=num_agents,
         seq_length=seq_length,
         hist_length=hist_length,
         dim_size=dim_size,
         use_ckpt_wrapper=config['model']['use_ckpt_wrapper'],
     ).to(device)
-    num_heads = model.num_heads
     
     # Model summary:
     if accelerator.is_main_process:
@@ -180,11 +179,9 @@ def main(config):
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
         for data in loader:
-            B, N, L, _ = data.shape
-            key_padding_mask = (data.sum(dim=-1) == 0.0).view(B * N, L)
             x = data[:, :, hist_length:, :].to(device)
             h = data[:, :, :hist_length, :].to(device)
-            model_kwargs = dict(h=h, mask=key_padding_mask)
+            model_kwargs = dict(h=h)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
