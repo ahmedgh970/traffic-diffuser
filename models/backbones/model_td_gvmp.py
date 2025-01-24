@@ -111,6 +111,10 @@ class MapEncoderPts(nn.Module):
         
         # Masking road points
         road_pts_mask = torch.sum(roads, dim=-1) == 0  # Shape: (B, S, P)
+        #for b in range(B):
+        #    all_false = not torch.any(road_pts_mask[b])
+        #    print(all_false)
+        #print("neeeeeext")
         road_pts_mask = road_pts_mask.type(torch.BoolTensor).to(roads.device).view(-1, roads.shape[2])
         road_pts_mask[:, 0][road_pts_mask.sum(-1) == roads.shape[2]] = False
         
@@ -123,7 +127,7 @@ class MapEncoderPts(nn.Module):
             query=map_seeds,
             key=road_pts_feats,
             value=road_pts_feats,
-            key_padding_mask=road_pts_mask)[0]
+            key_padding_mask=None)[0]
         
         # Layer normalization, FFN, and residual connection
         road_seg_emb = self.norm1(road_seg_emb)                         # (1, B*S, H)
@@ -133,7 +137,9 @@ class MapEncoderPts(nn.Module):
         # Reshape and expand to N agents
         road_seg_emb = road_seg_emb2.view(B, S, -1)                     # (B, S, H)
         road_seg_emb = road_seg_emb.unsqueeze(1)                        # (B, 1, S, H)
-        vmap_emb = road_seg_emb.expand(B, N, S, -1).view(B*N, S, -1)    # (B*N, S, H)
+        vmap_emb = road_seg_emb.expand(B, N, S, -1)                     # (B, N, S, H)
+        vmap_emb = vmap_emb.clone()
+        vmap_emb = vmap_emb.view(B*N, S, -1)                            # (B*N, S, H)
         return vmap_emb                                             
 
 #################################################################################

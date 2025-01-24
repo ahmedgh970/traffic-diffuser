@@ -1,4 +1,5 @@
 import math
+import numpy as np
 import torch
 import torch.nn as nn
 from timm.layers import Mlp, GluMlp, GatedMlp
@@ -49,14 +50,37 @@ class TimestepEmbedder(nn.Module):
     
 
 #################################################################################
-#                       Core TrafficDiffuser Model                              #
+#                          Helper Functions                                     #
 #################################################################################
+def get_1d_sincos_pos_embed(embed_dim, pos):
+    """
+    embed_dim: output dimension for each position
+    pos: a list of positions to be encoded: size (M,)
+    out: (M, D)
+    """
+    assert embed_dim % 2 == 0
+    omega = np.arange(embed_dim // 2, dtype=np.float64)
+    omega /= embed_dim / 2.
+    omega = 1. / 10000**omega  # (D/2,)
+
+    pos = pos.reshape(-1)  # (M,)
+    out = np.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
+
+    emb_sin = np.sin(out) # (M, D/2)
+    emb_cos = np.cos(out) # (M, D/2)
+
+    emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
+    return emb
 
 def modulate(x, shift, scale):
     # x: (B, N, H), shift: (B, H), scale: (B, H)
     # Broadcasted addition and multiplication
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)   # (B, N, H) 
 
+
+#################################################################################
+#                       Core TrafficDiffuser Model                              #
+#################################################################################
 class AdaTemporalEnc(nn.Module):
     """
     A Transformer encoder block with adaptive layer norm zero (adaLN-Zero) conditioning
@@ -75,12 +99,12 @@ class AdaTemporalEnc(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c, mask=None):
-        # [(B*N, L, H), (B*N, H), (B*N, L)]
+    def forward(self, x, c):
+        # [(B*N, L, H), (B*N, H)]
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         # Attention
         x_mod = modulate(self.norm1(x), shift_msa, scale_msa)              # (B*N, L, H)
-        x_mod, _ = self.mha(x_mod, x_mod, x_mod, key_padding_mask=mask)    # (B*N, L, H)
+        x_mod, _ = self.mha(x_mod, x_mod, x_mod)                           # (B*N, L, H)
         x = x + gate_msa.unsqueeze(1) * x_mod                              # (B*N, L, H)
         # Mlp/Gmlp
         x_mod = modulate(self.norm2(x), shift_mlp, scale_mlp)              # (B*N, L, H)
@@ -93,9 +117,9 @@ class FinalLayer(nn.Module):
     The final layer of the TrafficDiffuser
     Used for adaLN, project x the to desired output size.
     """
-    def __init__(self, max_num_agents, hist_length, seq_length, dim_size, hidden_size):
+    def __init__(self, num_agents, hist_length, seq_length, dim_size, hidden_size):
         super().__init__()
-        self.max_num_agents = max_num_agents
+        self.num_agents = num_agents
         self.hist_length = hist_length
         self.seq_length = seq_length
         self.dim_size = dim_size
@@ -112,7 +136,7 @@ class FinalLayer(nn.Module):
         x = modulate(self.norm_final(x), shift, scale)              # (B*N, L, H)
         x = self.linear(x)                                          # (B*N, L, D)
         x = x.reshape(
-            -1, self.max_num_agents, 
+            -1, self.num_agents, 
             self.hist_length + self.seq_length, 
             self.dim_size,
         )                                                           # (B, N, L, D)
@@ -125,7 +149,7 @@ class TrafficDiffuser(nn.Module):
     """
     def __init__(
         self,
-        max_num_agents,
+        num_agents,
         seq_length,
         hist_length,
         dim_size,
@@ -136,17 +160,25 @@ class TrafficDiffuser(nn.Module):
         mlp_ratio=4.0,
     ):
         super().__init__()
-        self.num_heads = num_heads  # only usefull for attn_mask in train_td script  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)   
+        #self.t_pos_embed = nn.Parameter(
+        #    torch.zeros(1, hist_length+seq_length, hidden_size), 
+        #    requires_grad=True,
+        #)
+        
+        #-- same pos embedding as in the original code
+        self.hidden_size = hidden_size
+        self.scene_length = hist_length + seq_length
         self.t_pos_embed = nn.Parameter(
             torch.zeros(1, hist_length+seq_length, hidden_size), 
-            requires_grad=True,
+            requires_grad=False,
         )       
+        
         self.t_blocks = nn.ModuleList([
             AdaTemporalEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])                        
-        self.final_layer = FinalLayer(max_num_agents, hist_length, seq_length, dim_size, hidden_size)   
+        self.final_layer = FinalLayer(num_agents, hist_length, seq_length, dim_size, hidden_size)   
         self.use_ckpt_wrapper = use_ckpt_wrapper
         self.initialize_weights()
 
@@ -158,6 +190,11 @@ class TrafficDiffuser(nn.Module):
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
         self.apply(_basic_init)
+        
+        # Initialize (and freeze) pos_embed by sin-cos embedding:
+        pos = np.arange(self.scene_length)
+        pos_embed = get_1d_sincos_pos_embed(self.hidden_size, pos)
+        self.t_pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -180,13 +217,12 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, h, mask):
+    def forward(self, x, t, h):
         """
         Forward pass of TrafficDiffuser.
-        - x: (B, N, L_x, D) tensor of agents where N:max_num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
+        - x: (B, N, L_x, D) tensor of agents where N:num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
-        - h: (B, N, L_h, D) tensor of history agents where N:max_num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
-        - mask: (B, N, L_h+L_x) tensor of key padding mask (to mask padded time steps)
+        - h: (B, N, L_h, D) tensor of history agents where N:num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
         """
         
         ##################### Cat and Proj ##########################
@@ -212,11 +248,11 @@ class TrafficDiffuser(nn.Module):
             for block in self.t_blocks:
                 x = torch.utils.checkpoint.checkpoint(
                     self.ckpt_wrapper(block),
-                    x, c, mask, use_reentrant=False
+                    x, c, use_reentrant=False
                 )
         else:
             for block in self.t_blocks:
-                x = block(x, c, mask)                   # (B*N, L, H)
+                x = block(x, c)                         # (B*N, L, H)
         #############################################################
         
         ##################### Final layer ###########################
