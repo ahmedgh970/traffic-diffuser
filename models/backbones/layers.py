@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,27 +9,19 @@ from einops import rearrange, repeat
 from timm.layers import Mlp, GluMlp, GatedMlp      
     
     
-    
-def modulate(x, shift, scale):
-    # x: (B, N, H), shift: (B, H), scale: (B, H)
-    # Broadcasted addition and multiplication
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)   # (B, N, H) 
 
 class AdaTransformerDec(nn.Module):
     """
-    A Transformer block with adaptive layer norm zero (adaLN-Zero) conditioning
+    A Transformer decoder block with adaptive layer norm zero (adaLN-Zero) conditioning
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
         super().__init__()
         self.num_heads = num_heads
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        
-        self.attn = Attention(dim=hidden_size, num_heads=num_heads)
+        self.mhsa = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True, dropout=0.1)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        
-        self.cattn = CrossAttentionLayer(embed_dim=hidden_size, num_heads=num_heads, dropout=0.1)
+        self.mhca = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True, dropout=0.1)
         self.norm3 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6) 
-        
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
         self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
@@ -37,17 +30,23 @@ class AdaTransformerDec(nn.Module):
             nn.Linear(hidden_size, 9 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c, cm, mask=None):
-        # [(B*N, L, H), (B*N, L, H), (B*N, H)]
+    def forward(self, x, c, cm):
+        # [(B*N, L, H), (B*N, H), (B*N, S, H)]
         shift_msa, scale_msa, gate_msa, shift_mca, scale_mca, gate_mca, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(9, dim=1)
-        # Self-Attention
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), mask=mask)       # (B*N, L, H)
-        # Cross-Attention
-        x = x + gate_mca.unsqueeze(1) * self.cattn(modulate(self.norm2(x), shift_mca, scale_mca), cm, mask=mask)  # (B*N, L, H)
+        # Self Attention
+        x_mod = modulate(self.norm1(x), shift_msa, scale_msa)              # (B*N, L, H)
+        x_mod, _ = self.mhsa(x_mod, x_mod, x_mod)                          # (B*N, L, H)
+        x = x + gate_msa.unsqueeze(1) * x_mod                              # (B*N, L, H)
+        # Cross Attention
+        x_mod = modulate(self.norm2(x), shift_mca, scale_mca)              # (B*N, L, H)
+        x_mod, _ = self.mhca(x_mod, cm, cm)                                # (B*N, L, H)
+        x = x + gate_mca.unsqueeze(1) * x_mod                              # (B*N, L, H)
         # Mlp/Gmlp
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm3(x), shift_mlp, scale_mlp))                   # (B*N, L, H)
+        x_mod = modulate(self.norm3(x), shift_mlp, scale_mlp)              # (B*N, L, H)
+        x_mod = self.mlp(x_mod)                                            # (B*N, L, H)
+        x = x + gate_mlp.unsqueeze(1) * x_mod                              # (B*N, L, H)
         return x
-  
+    
 class AdaTransformerEnc(nn.Module):
     """
     A Transformer encoder block with adaptive layer norm zero (adaLN-Zero) conditioning
@@ -56,7 +55,7 @@ class AdaTransformerEnc(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(dim=hidden_size, num_heads=num_heads)
+        self.mhsa = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -66,13 +65,17 @@ class AdaTransformerEnc(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c, mask=None):
-        # [(B, N, H), (B, H)]
+    def forward(self, x, c):
+        # [(B*N, L, H), (B*N, H)]
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        # Attention
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), mask=mask)   # (B, N, H)
+        # Self Attention
+        x_mod = modulate(self.norm1(x), shift_msa, scale_msa)              # (B*N, L, H)
+        x_mod, _ = self.mhsa(x_mod, x_mod, x_mod)                          # (B*N, L, H)
+        x = x + gate_msa.unsqueeze(1) * x_mod                              # (B*N, L, H)
         # Mlp/Gmlp
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))               # (B, N, H)
+        x_mod = modulate(self.norm2(x), shift_mlp, scale_mlp)              # (B*N, L, H)
+        x_mod = self.mlp(x_mod)                                            # (B*N, L, H)
+        x = x + gate_mlp.unsqueeze(1) * x_mod                              # (B*N, L, H)
         return x
 
 class CrossAttentionLayer(nn.Module):
@@ -148,52 +151,18 @@ class CrossAttentionLayer(nn.Module):
         output = self.out_proj(attended)  # (B, Q_len, embed_dim)
         return output
     
-class Attention(nn.Module):    
-    def __init__(
-            self,
-            dim: int,
-            num_heads: int = 8,
-            qkv_bias: bool = False,
-            qk_norm: bool = False,
-            attn_drop: float = 0.,
-            proj_drop: float = 0.,
-            norm_layer: nn.Module = nn.LayerNorm,
-    ) -> None:
-        super().__init__()
-        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
+def modulate(x, shift, scale):
+    # x: (B, N, H), shift: (B, H), scale: (B, H)
+    # Broadcasted addition and multiplication
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)   # (B, N, H) 
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
-        self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-    def forward(self, x: torch.Tensor, mask=None) -> torch.Tensor:
-        B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4) # (3, B, self.num_heads, N, self.head_dim)
-        q, k, v = qkv.unbind(0)
-        q, k = self.q_norm(q), self.k_norm(k)
-        
-        q = q * self.scale
-        attn = q @ k.transpose(-2, -1)
-        
-        if mask is not None:
-            attn = attn.masked_fill(mask.unsqueeze(1).unsqueeze(2) == 0, float('-inf'))
-            #attn = attn.masked_fill(mask.unsqueeze(1).unsqueeze(2) == 0, -1e5)
-            
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-        x = attn @ v
-
-        x = x.transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x 
-
+def init(module, weight_init, bias_init, gain=1):
+    '''
+    This function provides weight and bias initializations for linear layers.
+    '''
+    weight_init(module.weight.data, gain=gain)
+    bias_init(module.bias.data)
+    return module
 
 def get_1d_sincos_pos_embed(embed_dim, pos):
     """

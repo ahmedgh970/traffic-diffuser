@@ -176,12 +176,6 @@ def main(config):
         data = np.load(os.path.join(config['data']['test_dir'], filename))
         data = torch.tensor(data[:num_agents, :, :dim_size], dtype=torch.float32).to(device)        
         data = data.unsqueeze(0).expand(num_sampling, data.size(0), data.size(1), data.size(2))
-        
-        # key padding mask of the padded time steps
-        B, N, L, _ = data.shape
-        key_padding_mask = (data.sum(dim=-1) == 0.0).view(B * N, L)
-        # for cfg        
-        key_padding_mask = torch.cat([key_padding_mask, key_padding_mask], 0)
             
         # history
         h = data[:, :, :hist_length, :]
@@ -206,7 +200,7 @@ def main(config):
         x = torch.cat([x, x], 0)
         
         # kwargs
-        model_kwargs = dict(h=h, mask=None, mp=mp, cfg_scale=config['sample']['cfg_scale'])  
+        model_kwargs = dict(h=h, mp=mp, cfg_scale=config['sample']['cfg_scale'])  
         
         # Sample trajectories:
         samples = diffusion.p_sample_loop(

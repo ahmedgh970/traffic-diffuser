@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
-from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc
+from models.backbones.layers import modulate, AdaTransformerDec, AdaTransformerEnc, init, get_1d_sincos_pos_embed
 
 
 
@@ -48,14 +48,6 @@ class TimestepEmbedder(nn.Module):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         t_emb = self.mlp(t_freq)
         return t_emb
-
-def init(module, weight_init, bias_init, gain=1):
-    '''
-    This function provides weight and bias initializations for linear layers.
-    '''
-    weight_init(module.weight.data, gain=gain)
-    bias_init(module.bias.data)
-    return module
 
 class MapEncoderPts(nn.Module):
     '''
@@ -121,13 +113,13 @@ class MapEncoderPts(nn.Module):
         # Project and reshape roads
         # Combine information from each road segment using attention 
         # with agent contextual embeddings as queries.
-        road_pts_feats = self.road_pts_lin(roads).view(B*S, P, -1).permute(1, 0, 2)
+        road_pts_feats = self.road_pts_lin(roads).view(B*S, P, -1).permute(1, 0, 2) # (P, B*S, H)
         map_seeds = self.map_seeds.repeat(1, B*S, 1)
         road_seg_emb = self.road_pts_attn_layer(
             query=map_seeds,
             key=road_pts_feats,
             value=road_pts_feats,
-            key_padding_mask=None)[0]
+            key_padding_mask=road_pts_mask)[0]
         
         # Layer normalization, FFN, and residual connection
         road_seg_emb = self.norm1(road_seg_emb)                         # (1, B*S, H)
@@ -198,10 +190,13 @@ class TrafficDiffuser(nn.Module):
         super().__init__()  
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)   
+        
+        self.hidden_size = hidden_size
+        self.scene_length = hist_length + seq_length
         self.t_pos_embed = nn.Parameter(
-            torch.zeros(1, hist_length+seq_length, hidden_size), 
-            requires_grad=True,
-        ) 
+            torch.zeros(1, self.scene_length, hidden_size), 
+            requires_grad=False,
+        )  
         
         if use_map_embed:
             self.m_embedder = MapEncoderPts(
@@ -232,6 +227,11 @@ class TrafficDiffuser(nn.Module):
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
         self.apply(_basic_init)
+
+        # Initialize (and freeze) pos_embed by sin-cos embedding:
+        pos = np.arange(self.scene_length)
+        pos_embed = get_1d_sincos_pos_embed(self.hidden_size, pos)
+        self.t_pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -254,13 +254,12 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, h, mask=None, mp=None):
+    def forward(self, x, t, h, mp=None):
         """
         Forward pass of TrafficDiffuser.
         - x: (B, N, L_x, D) tensor of agents where N:num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
         - t: (B,) tensor of diffusion timesteps     
         - h: (B, N, L_h, D) tensor of history agents where N:num_agents, L_h:hist_sequence_length, and D:dim representing (x, y) positions
-        - mask: (B, N, L_h+L_x) tensor of key padding mask (to mask padded time steps)
         - mp: (B, S, L_m, D) tensor of the selected vector map. S is the number of selected segments, and L_m is the number of points per segment.
         """
         
@@ -268,11 +267,11 @@ class TrafficDiffuser(nn.Module):
         # (B, N, L_x, D), (B, N, L_h, D)
         x = torch.cat((h, x), dim=2)                    # (B, N, L, D)
         x = self.proj1(x)                               # (B, N, L, H)
-        B, N, L, H = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
+        B, N, L, H = x.shape
         #############################################################
         
         ###################### Embedders ############################
-        # (B, t_max=1000), (B, N, S, L_m, D)
+        # (B, t_max=1000), (B, S, L_m, D)
         c = self.t_embedder(t)                          # (B, H)
         c = c.unsqueeze(1)                              # (B, 1, H)
         c = c.expand(B, N, H).contiguous()              # (B, N, H)
@@ -292,21 +291,21 @@ class TrafficDiffuser(nn.Module):
                 for block in self.t_blocks:
                     x = torch.utils.checkpoint.checkpoint(
                         self.ckpt_wrapper(block),
-                        x, c, cm, mask, use_reentrant=False
+                        x, c, cm, use_reentrant=False
                     )
             else:
                 for block in self.t_blocks:
-                    x = block(x, c, cm, mask)           # (B*N, L, H)
+                    x = block(x, c, cm)                 # (B*N, L, H)
         else:
             if self.use_ckpt_wrapper:
                 for block in self.t_blocks:
                     x = torch.utils.checkpoint.checkpoint(
                         self.ckpt_wrapper(block),
-                        x, c, cm=None, mask=mask, use_reentrant=False
+                        x, c, use_reentrant=False
                     )
             else:
                 for block in self.t_blocks:
-                    x = block(x, c, cm=None, mask=mask) # (B*N, L, H)
+                    x = block(x, c)                     # (B*N, L, H)
         #############################################################
         
         ##################### Final layer ###########################
@@ -316,14 +315,14 @@ class TrafficDiffuser(nn.Module):
         
         return x
     
-    def forward_with_cfg(self, x, t, h, mask=None, mp=None, cfg_scale=4.0):
+    def forward_with_cfg(self, x, t, h, mp=None, cfg_scale=4.0):
         """
         Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
-        eps = self.forward(combined, t, h, mask, mp)
+        eps = self.forward(combined, t, h, mp)
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)

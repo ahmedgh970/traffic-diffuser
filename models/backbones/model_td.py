@@ -93,7 +93,8 @@ class AdaTemporalEnc(nn.Module):
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        #self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.mlp = GluMlp(in_features=hidden_size, hidden_features=mlp_hidden_dim)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
@@ -162,12 +163,7 @@ class TrafficDiffuser(nn.Module):
         super().__init__()
         self.proj1 = nn.Linear(dim_size, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)   
-        #self.t_pos_embed = nn.Parameter(
-        #    torch.zeros(1, hist_length+seq_length, hidden_size), 
-        #    requires_grad=True,
-        #)
         
-        #-- same pos embedding as in the original code
         self.hidden_size = hidden_size
         self.scene_length = hist_length + seq_length
         self.t_pos_embed = nn.Parameter(
