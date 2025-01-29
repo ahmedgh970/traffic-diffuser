@@ -46,11 +46,9 @@ def select_vmap(scenario, map_features, num_selected_features):
     Returns:
     - selected_vmap (np.ndarray): Selected map features of shape (N_max, S, 128, 2).
     """
-    N_max = scenario.shape[0]
-    Si, P = map_features.shape[:2]
-    
+
     # Initialize the fixed map features array
-    selected_vmap = np.zeros((N_max, num_selected_features, P, 2), dtype=map_features.dtype)
+    selected_vmap = np.zeros((scenario.shape[0], num_selected_features, map_features.shape[1], map_features.shape[2]), dtype=map_features.dtype)
     
     # Filter out the padded agents from the scenario
     non_padded_mask = np.any(scenario != 0, axis=(1, 2))
@@ -65,11 +63,11 @@ def select_vmap(scenario, map_features, num_selected_features):
 
 
 if __name__ == "__main__":
-    scene_dir = '/data/ahmed.ghorbel/workdir/autod/backup/data/tracks/train'
-    vmap_dir = '/data/ahmed.ghorbel/workdir/autod/backup/data/maps/full'
-    output_dir = '/data/ahmed.ghorbel/workdir/autod/backup/data/maps/!!!'
+    scene_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/tracks/train_nag4'
+    vmap_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/full'
+    output_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/filtered/multi_nag4_s46'
     os.makedirs(output_dir, exist_ok=True)
-    num_selected_seg = 32
+    num_selected_seg = 46
     
     for filename in os.listdir(scene_dir):
         scene = np.load(os.path.join(scene_dir, filename))

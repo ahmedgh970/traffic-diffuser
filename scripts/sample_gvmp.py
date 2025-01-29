@@ -187,13 +187,14 @@ def main(config):
             mp = np.load(os.path.join(config['data']['map_dir'], filename))
             # if vector map
             mp = torch.tensor(mp, dtype=torch.float32).to(device)
-            mp = mp.unsqueeze(0).expand(num_sampling, mp.size(0), mp.size(1), mp.size(2))
+            mp = mp.unsqueeze(0).expand(num_sampling, *mp.shape)
             # for cfg
-            mp_null = torch.full(mp.size(), 0.0, device=device)
+            mp_null = torch.full(mp.shape, 0.0, device=device)
             mp = torch.cat([mp, mp_null], 0)
         else:
             mp = None
                   
+        
         # Create sampling noise:
         x = torch.randn(num_sampling, num_agents, seq_length, dim_size, device=device)
         # for cfg

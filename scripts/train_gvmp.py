@@ -80,8 +80,8 @@ class CustomDataset(Dataset):
         map_npy = np.load(os.path.join(self.map_path, data_file))
         map_tensor = torch.tensor(map_npy, dtype=torch.float32)
         # for vector map
-        assert map_tensor.shape == (46, 128, 2), \
-            f"Unexpected shape {map_tensor.shape} at index {idx}"
+        #assert map_tensor.shape == (46, 128, 2), \
+        #    f"Unexpected shape {map_tensor.shape} at index {idx}"
         return data_tensor, map_tensor
 
 
