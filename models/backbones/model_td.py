@@ -2,7 +2,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
-from timm.layers import Mlp, GluMlp, GatedMlp
+from timm.layers import Mlp, GatedMlp
 
 
 #################################################################################
@@ -94,7 +94,7 @@ class AdaTemporalEnc(nn.Module):
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
         #self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-        self.mlp = GluMlp(in_features=hidden_size, hidden_features=mlp_hidden_dim)
+        self.mlp = GatedMlp(in_features=hidden_size, hidden_features=mlp_hidden_dim)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)

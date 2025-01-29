@@ -79,13 +79,12 @@ class MapEncoderPts(nn.Module):
             init_(nn.Linear(self.hidden_size, self.hidden_size*3)), nn.ReLU(), nn.Dropout(self.dropout),
             init_(nn.Linear(self.hidden_size*3, self.hidden_size)),
         )
-
     def token_drop(self, roads, drop_fill_value):
         """
-        Drops roads to enable classifier-free guidance.
+        Drops entire road segments to enable classifier-free guidance.
         """
         drop_ids = torch.rand(roads.shape[0], device=roads.device) < self.dropout_prob
-        roads[drop_ids] = torch.full(roads.size()[1:], drop_fill_value, device=roads.device)
+        roads[drop_ids] = torch.full_like(roads[drop_ids], drop_fill_value)
         return roads
     
     def forward(self, roads, train):
@@ -103,10 +102,6 @@ class MapEncoderPts(nn.Module):
         
         # Masking road points
         road_pts_mask = torch.sum(roads, dim=-1) == 0  # Shape: (B, S, P)
-        #for b in range(B):
-        #    all_false = not torch.any(road_pts_mask[b])
-        #    print(all_false)
-        #print("neeeeeext")
         road_pts_mask = road_pts_mask.type(torch.BoolTensor).to(roads.device).view(-1, roads.shape[2])
         road_pts_mask[:, 0][road_pts_mask.sum(-1) == roads.shape[2]] = False
         
@@ -134,6 +129,79 @@ class MapEncoderPts(nn.Module):
         vmap_emb = vmap_emb.view(B*N, S, -1)                            # (B*N, S, H)
         return vmap_emb                                             
 
+class MapEncoderPtsMA(nn.Module):
+    '''
+    This class operates on the multi-agent road lanes provided as a tensor with shape
+    (B, num_agents, num_road_segs, num_pts_per_road_seg, k_attr)
+    '''
+    def __init__(self, hidden_size, map_attr, 
+                 dropout=0.1, dropout_prob=0.25, 
+                 drop_fill_value=0.0
+        ):
+        super(MapEncoderPtsMA, self).__init__()
+        self.map_attr = map_attr
+        self.dropout = dropout
+        self.dropout_prob = dropout_prob
+        self.drop_fill_value = drop_fill_value
+        self.hidden_size = hidden_size
+        init_ = lambda m: init(m, nn.init.xavier_normal_, lambda x: nn.init.constant_(x, 0), np.sqrt(2))
+
+        # Seed parameters for the map
+        self.map_seeds = nn.Parameter(torch.Tensor(1, 1, self.hidden_size), requires_grad=True)
+        nn.init.xavier_uniform_(self.map_seeds)
+
+        self.road_pts_lin = nn.Sequential(init_(nn.Linear(self.map_attr, self.hidden_size)))
+        self.road_pts_attn_layer = nn.MultiheadAttention(self.hidden_size, num_heads=8, dropout=self.dropout)
+        self.norm1 = nn.LayerNorm(self.hidden_size, eps=1e-5)
+        self.norm2 = nn.LayerNorm(self.hidden_size, eps=1e-5)
+        self.map_feats = nn.Sequential(
+            init_(nn.Linear(self.hidden_size, self.hidden_size*3)), nn.ReLU(), nn.Dropout(self.dropout),
+            init_(nn.Linear(self.hidden_size*3, self.hidden_size)),
+        )
+    def token_drop(self, roads, drop_fill_value):
+        """
+        Drops entire road segments to enable classifier-free guidance.
+        """
+        drop_ids = torch.rand(roads.shape[0], device=roads.device) < self.dropout_prob
+        roads[drop_ids] = torch.full_like(roads[drop_ids], drop_fill_value)
+        return roads
+    
+    def forward(self, roads, train):
+        '''
+        :param roads: (B, N, S, P, k_attr) where B is batch size,
+                                                N is the number of agents, 
+                                                S is num road segments,
+                                                P is num pts per road segment.
+        :param train: boolean flag to indicate training mode
+        :return: embedded road segments with shape (S) (B*N, S, hidden_size]
+        '''
+        if (train and self.dropout_prob > 0):
+            roads = self.token_drop(roads, self.drop_fill_value)          
+        B, N, S, P = roads.shape[:4]
+        
+        # Masking road points
+        road_pts_mask = torch.sum(roads, dim=-1) == 0  # Shape: (B, N, S, P)
+        road_pts_mask = road_pts_mask.type(torch.BoolTensor).to(roads.device).view(-1, roads.shape[3])
+        road_pts_mask[:, 0][road_pts_mask.sum(-1) == roads.shape[3]] = False
+        
+        # Project and reshape roads
+        # Combine information from each road segment using attention 
+        # with agent contextual embeddings as queries.
+        road_pts_feats = self.road_pts_lin(roads).view(B*N*S, P, -1).permute(1, 0, 2) # (P, B*N*S, H)
+        map_seeds = self.map_seeds.repeat(1, B*N*S, 1)
+        road_seg_emb = self.road_pts_attn_layer(
+            query=map_seeds,
+            key=road_pts_feats,
+            value=road_pts_feats,
+            key_padding_mask=road_pts_mask)[0]
+        
+        # Layer normalization, FFN, and residual connection
+        road_seg_emb = self.norm1(road_seg_emb)                         # (1, B*N*S, H)
+        road_seg_emb2 = road_seg_emb + self.map_feats(road_seg_emb)     # (1, B*N*S, H)
+        road_seg_emb2 = self.norm2(road_seg_emb2)                       # (1, B*N*S, H)
+        road_seg_emb = road_seg_emb2.view(B*N, S, -1)                   # (B*N, S, H)
+        return road_seg_emb  
+    
 #################################################################################
 #                       Core TrafficDiffuser Model                              #
 #################################################################################
@@ -199,9 +267,15 @@ class TrafficDiffuser(nn.Module):
         )  
         
         if use_map_embed:
-            self.m_embedder = MapEncoderPts(
+            #self.m_embedder = MapEncoderPts(
+            #    hidden_size=hidden_size,
+            #    num_agents=num_agents,
+            #    map_attr=dim_size,
+            #    dropout_prob=map_dropout_prob,
+            #    drop_fill_value=map_drop_fill_value,           
+            #)
+            self.m_embedder = MapEncoderPtsMA(
                 hidden_size=hidden_size,
-                num_agents=num_agents,
                 map_attr=dim_size,
                 dropout_prob=map_dropout_prob,
                 drop_fill_value=map_drop_fill_value,           

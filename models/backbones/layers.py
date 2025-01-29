@@ -20,7 +20,8 @@ class AdaTransformerDec(nn.Module):
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.mhsa = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True, dropout=0.1)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.mhca = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True, dropout=0.1)
+        #self.mhca = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True, dropout=0.1)
+        self.mhca = CrossAttentionLayer(embed_dim=hidden_size, num_heads=num_heads, dropout=0.1)
         self.norm3 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6) 
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -39,7 +40,8 @@ class AdaTransformerDec(nn.Module):
         x = x + gate_msa.unsqueeze(1) * x_mod                              # (B*N, L, H)
         # Cross Attention
         x_mod = modulate(self.norm2(x), shift_mca, scale_mca)              # (B*N, L, H)
-        x_mod, _ = self.mhca(x_mod, cm, cm)                                # (B*N, L, H)
+        #x_mod, _ = self.mhca(x_mod, cm, cm)                                # (B*N, L, H)
+        x_mod = self.mhca(x_mod, cm)                                       # (B*N, L, H)
         x = x + gate_mca.unsqueeze(1) * x_mod                              # (B*N, L, H)
         # Mlp/Gmlp
         x_mod = modulate(self.norm3(x), shift_mlp, scale_mlp)              # (B*N, L, H)
