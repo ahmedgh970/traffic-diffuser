@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
-from models.backbones.layers import modulate, AdaTransformerAE, AdaTransformerEnc, init, get_1d_sincos_pos_embed
+from models.backbones.layers import modulate, AdaTransformerEnc, AdaTransformerDec, init, get_1d_sincos_pos_embed
 
 
 
@@ -273,12 +273,15 @@ class TrafficDiffuser(nn.Module):
                 dropout_prob=map_dropout_prob,
                 drop_fill_value=map_drop_fill_value,           
             )
-            self.t_blocks = nn.ModuleList([
-                AdaTransformerAE(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            self.enc_blocks = nn.ModuleList([
+                AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            ])
+            self.dec_blocks = nn.ModuleList([
+                AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
             ])
         else:
-            self.t_blocks = nn.ModuleList([
-                AdaTransformerAE(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            self.enc_blocks = nn.ModuleList([
+                AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(2*depth)
             ])            
                  
         self.final_layer = FinalLayer(num_agents, hist_length, seq_length, dim_size, hidden_size)   
@@ -305,9 +308,13 @@ class TrafficDiffuser(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
         
         # Zero-out adaLN modulation layers for t_block:
-        for block in self.t_blocks:
+        for block in self.enc_blocks:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+        if self.use_map_embed:
+            for block in self.dec_blocks:
+                nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+                nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
             
         # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
@@ -355,23 +362,32 @@ class TrafficDiffuser(nn.Module):
                 mp, train=self.training)                # (B*N, S, H)
 
             if self.use_ckpt_wrapper:
-                for block in self.t_blocks:
+                for block in self.enc_blocks:
+                    x = torch.utils.checkpoint.checkpoint(
+                        self.ckpt_wrapper(block),
+                        x, c, use_reentrant=False
+                    )
+                #x_enc = x
+                for block in self.dec_blocks:
                     x = torch.utils.checkpoint.checkpoint(
                         self.ckpt_wrapper(block),
                         x, c, cm, use_reentrant=False
                     )
             else:
-                for block in self.t_blocks:
-                    x = block(x, c, cm)                 # (B*N, L, H)
+                for block in self.enc_blocks:
+                    x = block(x, c)                 # (B*N, L, H)
+                #x_enc = x
+                for block in self.dec_blocks:
+                    x = block(x, c, cm)             # (B*N, L, H)
         else:
             if self.use_ckpt_wrapper:
-                for block in self.t_blocks:
+                for block in self.enc_blocks:
                     x = torch.utils.checkpoint.checkpoint(
                         self.ckpt_wrapper(block),
                         x, c, use_reentrant=False
                     )
             else:
-                for block in self.t_blocks:
+                for block in self.enc_blocks:
                     x = block(x, c)                     # (B*N, L, H)
         #############################################################
         
