@@ -10,6 +10,27 @@ from einops import rearrange, repeat
 from timm.layers import Mlp, GluMlp, GatedMlp      
 
 
+
+class MapTransformerEnc(nn.Module):
+    """
+    A Transformer encoder block for map encoding
+    """
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
+        super().__init__()
+        self.num_heads = num_heads
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.mhca = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=True, dropout=0)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)   
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+
+    def forward(self, x_q, x_kv, key_pad_mask):
+        # [(B*N*S, 1, H), (B*N*S, P, H), (B*N*S, P)]
+        x_q = x_q + self.mhca(self.norm1(x_q), x_kv, x_kv, key_pad_mask)[0]
+        x_q = x_q + self.mlp(self.norm2(x_q))                                   # (B*N*S, 1, H)
+        return x_q
+    
 class AdaTransformerDec0(nn.Module):
     """
     A Transformer decoder block with adaptive layer norm zero (adaLN-Zero) conditioning
@@ -393,116 +414,7 @@ class MultiHeadAttention(nn.Module):
 
 ################# New ada transformer classes #######################
 
-class AdaTransformerAE(nn.Module):
-    """
-    A Transformer autoencoder block with adaptive layer norm zero (adaLN-Zero) conditioning
-    """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
-        super().__init__()
-        self.num_heads = num_heads
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        #-- encoder
-        self.norm1_enc = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.mhsa_enc = MultiHeadAttention(
-            num_heads=num_heads,
-            num_q_input_channels=hidden_size,
-            num_kv_input_channels=hidden_size,
-            causal_attention=False,
-            dropout=0.0,)
-        self.norm2_enc = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)   
-        self.mlp_enc = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-        #-- decoder
-        self.norm1_dec = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.mhsa_dec = MultiHeadAttention(
-            num_heads=num_heads,
-            num_q_input_channels=hidden_size,
-            num_kv_input_channels=hidden_size,
-            causal_attention=True,
-            dropout=0.0,)   
 
-        self.norm2_dec = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.mhca_dec = MultiHeadAttention(
-            num_heads=num_heads,
-            num_q_input_channels=hidden_size,
-            num_kv_input_channels=hidden_size,
-            causal_attention=False,
-            dropout=0.0,)
-        self.norm3_dec = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)   
-        self.mlp_dec = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-        
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_size, 15 * hidden_size, bias=True)
-        )
-
-    def forward(self, x, c, cm=None):
-        # [(B*N, L, H), (B*N, H), (B*N, S, H)]
-        chunks = tuple(self.adaLN_modulation(c).chunk(15, dim=1))
-        ssg1, ssg2, ssg3, ssg4, ssg5 = (chunks[i:i+3] for i in range(0, 15, 3))
-        ############ Transformer encoder ############
-        # Self Attention
-        x_mod = modulate(self.norm1_enc(x), ssg1[0], ssg1[1])            # (B*N, L, H)
-        x_mod = self.mhsa_enc(x_q=x_mod, x_kv=x_mod).last_hidden_state   # (B*N, L, H)
-        x = x + ssg1[2].unsqueeze(1) * x_mod                             # (B*N, L, H)
-        # Mlp
-        x_mod = modulate(self.norm2_enc(x), ssg2[0], ssg2[1])            # (B*N, L, H)
-        x_mod = self.mlp_enc(x_mod)                                      # (B*N, L, H)
-        x = x + ssg2[2].unsqueeze(1) * x_mod                             # (B*N, L, H)
-        if cm is None:
-            cm = x.clone()
-
-        ############ Transformer decoder ############
-        # Masked Self Attention
-        x_mod = modulate(self.norm1_dec(x), ssg3[0], ssg3[1])            # (B*N, L, H)
-        x_mod = self.mhsa_dec(x_q=x_mod, x_kv=x_mod).last_hidden_state   # (B*N, L, H)
-        x = x + ssg3[2].unsqueeze(1) * x_mod                             # (B*N, L, H)
-        # Cross Attention
-        x_mod = modulate(self.norm2_dec(x), ssg4[0], ssg4[1])            # (B*N, L, H)
-        x_mod = self.mhca_dec(x_q=x_mod, x_kv=cm).last_hidden_state      # (B*N, L, H)
-        x = x + ssg4[2].unsqueeze(1) * x_mod                             # (B*N, L, H)
-        # Mlp
-        x_mod = modulate(self.norm3_dec(x), ssg5[0], ssg5[1])            # (B*N, L, H)
-        x_mod = self.mlp_dec(x_mod)                                      # (B*N, L, H)
-        x = x + ssg5[2].unsqueeze(1) * x_mod                             # (B*N, L, H)
-
-        return x
-    
-
-class AdaTransformerEnc(nn.Module):
-    """
-    A Transformer encoder block with adaptive layer norm zero (adaLN-Zero) conditioning
-    """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
-        super().__init__()
-        self.num_heads = num_heads
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        self.norm1_enc = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.mhsa_enc = MultiHeadAttention(
-            num_heads=num_heads,
-            num_q_input_channels=hidden_size,
-            num_kv_input_channels=hidden_size,
-            causal_attention=False,
-            dropout=0.0,)
-        self.norm2_enc = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)   
-        self.mlp_enc = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
-        )
-    def forward(self, x, c):
-        # [(B*N, L, H), (B*N, H), (B*N, S, H)]
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        # Self Attention
-        x_mod = modulate(self.norm1_enc(x), shift_msa, scale_msa)          # (B*N, L, H)
-        x_mod = self.mhsa_enc(x_q=x_mod, x_kv=x_mod).last_hidden_state     # (B*N, L, H)
-        x = x + gate_msa.unsqueeze(1) * x_mod                              # (B*N, L, H)
-        # Mlp
-        x_mod = modulate(self.norm2_enc(x), shift_mlp, scale_mlp)          # (B*N, L, H)
-        x_mod = self.mlp_enc(x_mod)                                        # (B*N, L, H)
-        x = x + gate_mlp.unsqueeze(1) * x_mod                              # (B*N, L, H)
-        return x
     
 
 class AdaTransformerDec(nn.Module):
@@ -519,7 +431,7 @@ class AdaTransformerDec(nn.Module):
             num_heads=num_heads,
             num_q_input_channels=hidden_size,
             num_kv_input_channels=hidden_size,
-            causal_attention=True,
+            causal_attention=False,
             dropout=0.0,)   
         self.norm2_dec = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.mhca_dec = MultiHeadAttention(
@@ -543,9 +455,9 @@ class AdaTransformerDec(nn.Module):
         x = x + gate_msa.unsqueeze(1) * x_mod                              # (B*N, L, H)
         # Cross Attention
         x_mod = modulate(self.norm2_dec(x), shift_mca, scale_mca)          # (B*N, L, H)
+        if cm is None:
+            cm = x_mod
         x_mod = self.mhca_dec(x_q=x_mod, x_kv=cm).last_hidden_state        # (B*N, L, H)
-        # in the case where c = ct + cm (use the enc out as cm in x_kv)
-        #x_mod = self.mhca_dec(x_q=x_mod, x_kv=cm).last_hidden_state        # (B*N, L, H)
         x = x + gate_mca.unsqueeze(1) * x_mod                              # (B*N, L, H)
         # Mlp
         x_mod = modulate(self.norm3_dec(x), shift_mlp, scale_mlp)          # (B*N, L, H)
