@@ -189,7 +189,10 @@ def main(config):
             mp = torch.tensor(mp, dtype=torch.float32).to(device)
             mp = mp.unsqueeze(0).expand(num_sampling, *mp.shape)
             # for cfg
-            mp_null = torch.full(mp.shape, 0.0, device=device)
+            filename_null = 'sd_nuscenes_v1.0-trainval_scene-0652.npy'
+            mp_null = np.load(os.path.join(config['data']['map_dir'], filename_null))
+            mp_null = torch.tensor(mp_null, dtype=torch.float32).to(device)
+            mp_null = mp_null.unsqueeze(0).expand(num_sampling, *mp_null.shape)
             mp = torch.cat([mp, mp_null], 0)
         else:
             mp = None

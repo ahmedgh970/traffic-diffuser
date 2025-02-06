@@ -1,3 +1,4 @@
+import os
 import math
 import torch
 import torch.nn as nn
@@ -206,11 +207,10 @@ class MapEncoderPtsMA_v2(nn.Module):
     This class operates on the multi-agent road lanes provided as a tensor with shape
     (B, num_agents, num_road_segs, num_pts_per_road_seg, k_attr)
     '''
-    def __init__(self, hidden_size, num_heads=8, num_agents=4, num_segments=10, map_attr=2, 
-                 dropout=0.1, dropout_prob=0.25, 
-                 drop_fill_value=0.0,
-                 depth=4,
-                 mlp_ratio=4.0
+    def __init__(self, hidden_size, num_heads=8, num_agents=4, 
+                 num_segments=10, map_attr=2, dropout=0.1, 
+                 dropout_prob=0.25, drop_fill_value=0.0, 
+                 depth=4, mlp_ratio=4.0
         ):
         super().__init__()
         self.map_attr = map_attr
@@ -221,23 +221,23 @@ class MapEncoderPtsMA_v2(nn.Module):
         init_ = lambda m: init(m, nn.init.xavier_normal_, lambda x: nn.init.constant_(x, 0), np.sqrt(2))
 
         # Seed parameters for the map
-        map_seeds = nn.Parameter(torch.Tensor(num_agents, num_segments, 1, hidden_size))   # (N, S, 1, H)
+        map_seeds = nn.Parameter(torch.Tensor(1, num_segments, 1, hidden_size))   # (1, S, 1, H)
         nn.init.xavier_uniform_(map_seeds)
-        self.map_seeds = map_seeds.reshape(-1, 1, hidden_size)                             # (N*S, 1, H)
+        self.map_seeds = map_seeds.reshape(-1, 1, hidden_size)                             # (S, 1, H)
         self.road_pts_lin = nn.Sequential(init_(nn.Linear(self.map_attr, self.hidden_size)))
         self.enc_blocks = nn.ModuleList([
             MapTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
 
-    def token_drop(self, roads, drop_fill_value):
+    def token_drop(self, roads, roads_null, drop_fill_value):
         """
         Drops entire road segments to enable classifier-free guidance.
         """
         drop_ids = torch.rand(roads.shape[0], device=roads.device) < self.dropout_prob
-        roads[drop_ids] = torch.full_like(roads[drop_ids], drop_fill_value)
+        roads[drop_ids] = roads_null[drop_ids]
         return roads
     
-    def forward(self, roads, train):
+    def forward(self, roads, roads_null, train):
         '''
         :param roads: (B, N, S, P, k_attr) where B is batch size,
                                                 N is the number of agents, 
@@ -247,7 +247,7 @@ class MapEncoderPtsMA_v2(nn.Module):
         :return: embedded road segments with shape (S) (B*N, S, hidden_size]
         '''
         if (train and self.dropout_prob > 0):
-            roads = self.token_drop(roads, self.drop_fill_value)          
+            roads = self.token_drop(roads, roads_null, self.drop_fill_value)          
         B, N, S, P = roads.shape[:4]
         
         # Masking road points
@@ -259,7 +259,7 @@ class MapEncoderPtsMA_v2(nn.Module):
         # Combine information from each road segment using cross attention 
         # with agent contextual embeddings as queries.
         road_pts_feats = self.road_pts_lin(roads).view(B*N*S, P, -1)                       # (B*N*S, P, H)
-        map_seeds = self.map_seeds.repeat(B, 1, 1).to(road_pts_feats.device)               # (B*N*S, 1, H)
+        map_seeds = self.map_seeds.repeat(B*N, 1, 1).to(road_pts_feats.device)               # (B*N*S, 1, H)
         for block in self.enc_blocks:
             map_seeds = block(map_seeds, road_pts_feats, road_pts_mask)                    # (B*N*S, 1, H)
         road_seg_emb = map_seeds.view(B*N, S, -1)                                          # (B*N, S, H)
@@ -316,7 +316,7 @@ class TrafficDiffuser(nn.Module):
         num_heads,
         depth,
         mlp_ratio=4.0,
-        map_dropout_prob=0.25,
+        map_dropout_prob=0.1,
         map_drop_fill_value=0.0,
     ):
         super().__init__()  
@@ -331,7 +331,7 @@ class TrafficDiffuser(nn.Module):
         )  
         
         if use_map_embed:
-            self.m_embedder = MapEncoderPtsMA(
+            self.m_embedder = MapEncoderPtsMA_v2(
                 hidden_size=hidden_size,
                 map_attr=dim_size,
                 dropout_prob=map_dropout_prob,
@@ -388,7 +388,7 @@ class TrafficDiffuser(nn.Module):
             return outputs
         return ckpt_forward
     
-    def forward(self, x, t, h, mp=None):
+    def forward(self, x, t, h, mp=None, mp_null=None):
         """
         Forward pass of TrafficDiffuser.
         - x: (B, N, L_x, D) tensor of agents where N:num_agents, L_x:sequence_length, and D:dim representing (x, y) positions
@@ -413,7 +413,7 @@ class TrafficDiffuser(nn.Module):
 
         if self.use_map_embed:
             cm = self.m_embedder(
-                mp, train=self.training)                # (B*N, S, H)
+                mp, mp_null, train=self.training)       # (B*N, S, H)
         else:
             cm = None                                   
         #############################################################
