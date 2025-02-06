@@ -413,9 +413,40 @@ class MultiHeadAttention(nn.Module):
 
 
 ################# New ada transformer classes #######################
-
-
-    
+class AdaTransformerEnc(nn.Module):
+    """
+    A Transformer encoder block with adaptive layer norm zero (adaLN-Zero) conditioning
+    """
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
+        super().__init__()
+        self.num_heads = num_heads
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        self.norm1_enc = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.mhsa_enc = MultiHeadAttention(
+            num_heads=num_heads,
+            num_q_input_channels=hidden_size,
+            num_kv_input_channels=hidden_size,
+            causal_attention=False,
+            dropout=0.0,)   
+        self.norm2_enc = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)  
+        self.mlp_enc = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)     
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+        )
+    def forward(self, x, c):
+        # [(B*N, L, H), (B*N, H)]
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+        # Masked Self Attention
+        x_mod = modulate(self.norm1_enc(x), shift_msa, scale_msa)          # (B*N, L, H)
+        x_mod = self.mhsa_enc(x_q=x_mod, x_kv=x_mod).last_hidden_state     # (B*N, L, H)
+        x = x + gate_msa.unsqueeze(1) * x_mod                              # (B*N, L, H)
+        # Mlp
+        x_mod = modulate(self.norm2_enc(x), shift_mlp, scale_mlp)          # (B*N, L, H)
+        x_mod = self.mlp_enc(x_mod)                                        # (B*N, L, H)
+        x = x + gate_mlp.unsqueeze(1) * x_mod                              # (B*N, L, H)
+        return x
 
 class AdaTransformerDec(nn.Module):
     """
