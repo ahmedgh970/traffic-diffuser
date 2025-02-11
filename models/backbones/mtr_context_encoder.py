@@ -97,3 +97,17 @@ class PointNetPolylineEncoder(nn.Module):
             feature_buffers[valid_mask] = feature_buffers_valid
 
         return feature_buffers
+
+
+def test_point_net_polyline_encoder():
+    model = PointNetPolylineEncoder(in_channels=2, hidden_dim=256, num_layers=3, num_pre_layers=1, out_channels=None)
+
+    polylines = torch.randn(4, 10, 128, 2)
+    polylines_mask = torch.randn(4, 10, 128) > 0.5
+
+    output = model(polylines, polylines_mask)
+
+    print(output.shape)
+
+
+test_point_net_polyline_encoder()
