@@ -72,17 +72,14 @@ class MapEncoderPtsMA(nn.Module):
             init_(nn.Linear(hidden_size, hidden_size*3)), nn.ReLU(), nn.Dropout(0.1),
             init_(nn.Linear(hidden_size*3, hidden_size)),
         )
-        #self.null_token = nn.Parameter(torch.randn(4, 10, 128, 2), requires_grad=True)
-        self.null_token = nn.Parameter(torch.Tensor(4, 10, 128, 2), requires_grad=True)
-        nn.init.xavier_uniform_(self.null_token)
         self.dropout_prob = dropout_prob
 
     def token_drop(self, roads):
         drop_mask = torch.rand(roads.shape[0]) < self.dropout_prob
-        roads[drop_mask] = self.null_token.expand_as(roads[drop_mask])
+        roads[drop_mask] = torch.zeros_like(roads[drop_mask])
         return roads
     
-    def forward(self, roads, train):
+    def forward(self, roads, train=False):
         '''
         :param roads: (B, N, S, P, k_attr) where B is batch size,
                                                 N is the number of agents, 
@@ -129,20 +126,21 @@ class MapEncoderPtsMA_v2(nn.Module):
                  num_heads=8, depth=4, mlp_ratio=4.0,):
         super().__init__()
         init_ = lambda m: init(m, nn.init.xavier_normal_, lambda x: nn.init.constant_(x, 0), np.sqrt(2))
-        self.map_seeds = nn.Parameter(torch.Tensor(1, 1, hidden_size), requires_grad=True)
+        num_segments = 10
+        map_seeds = nn.Parameter(torch.Tensor(1, num_segments, 1, hidden_size), requires_grad=True)
+        nn.init.xavier_uniform_(map_seeds)
+        self.map_seeds = map_seeds.reshape(-1, 1, hidden_size)  # (S, 1, H)
         nn.init.xavier_uniform_(self.map_seeds)
         self.road_pts_lin = nn.Sequential(init_(nn.Linear(map_attr, hidden_size)))
         self.enc_blocks = nn.ModuleList([
             MapTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
-        self.null_token = nn.Parameter(torch.randn(4, 10, 128, 2), requires_grad=True)
-        #self.null_token = nn.Parameter(torch.Tensor(4, 10, 128, 2), requires_grad=True)
-        #nn.init.xavier_uniform_(self.null_token)
+        #self.null_token = nn.Parameter(torch.randn(4, 10, 128, 2), requires_grad=True)
         self.dropout_prob = dropout_prob
 
     def token_drop(self, roads):
         drop_mask = torch.rand(roads.shape[0]) < self.dropout_prob
-        roads[drop_mask] = self.null_token.expand_as(roads[drop_mask])
+        roads[drop_mask] = torch.zeros_like(roads[drop_mask])
         return roads
     
     def forward(self, roads, train):
@@ -167,7 +165,7 @@ class MapEncoderPtsMA_v2(nn.Module):
         # Combine information from each road segment using cross attention 
         # with agent contextual embeddings as queries.
         road_pts_feats = self.road_pts_lin(roads).view(B*N*S, P, -1)                       # (B*N*S, P, H)
-        map_seeds = self.map_seeds.repeat(B*N*S, 1, 1).to(road_pts_feats.device)           # (B*N*S, 1, H)
+        map_seeds = self.map_seeds.repeat(B*N, 1, 1).to(road_pts_feats.device)             # (B*N*S, 1, H)
         for block in self.enc_blocks:
             map_seeds = block(map_seeds, road_pts_feats, road_pts_mask)                    # (B*N*S, 1, H)
         road_seg_emb = map_seeds.view(B*N, S, -1)                                          # (B*N, S, H)
@@ -206,7 +204,27 @@ class FinalLayer(nn.Module):
             self.dim_size,)                                         # (B, N, L, D)
         x = x[:, :, self.hist_length:, :]                           # (B, N, L_x, D)
         return x
+
+class AttentionPooling(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1)
+        )
     
+    def forward(self, x, mask=None):
+        # x shape: (B, S, H) where S is the number of segments
+        # mask shape: (B, S) with 1 for valid segments and 0 for padded segments (if needed)
+        attn_scores = self.attention(x).squeeze(-1)  # (B, S)
+        if mask is not None:
+            attn_scores = attn_scores.masked_fill(mask == 0, float('-inf'))
+        attn_weights = torch.softmax(attn_scores, dim=-1).unsqueeze(-1)  # (B, S, 1)
+        pooled = (x * attn_weights).sum(dim=1)  # (B, H)
+        return pooled
+
+
 class TrafficDiffuser(nn.Module):
     """
     Diffusion backbone with Transformer layers.
@@ -238,7 +256,8 @@ class TrafficDiffuser(nn.Module):
             self.m_embedder = MapEncoderPtsMA(
                 hidden_size=hidden_size,
                 map_attr=dim_size,
-                dropout_prob=map_dropout_prob,) 
+                dropout_prob=map_dropout_prob,)
+            self.pool = AttentionPooling(hidden_size, hidden_size) 
             self.condition_fuser = nn.Sequential(
                 nn.Linear(2*hidden_size, hidden_size),
                 nn.GELU())
@@ -322,6 +341,8 @@ class TrafficDiffuser(nn.Module):
                 mp, train=self.training)                # (B*N, S, H)
             c = self.condition_fuser(torch.cat(
                 [ct, cm.mean(dim=1)], dim=-1))          # (B*N, H)
+            #c = self.condition_fuser(torch.cat(
+            #    [ct, self.pool(cm)], dim=-1))           # (B*N, H)
         else:
             cm = None
             c = ct                                               
@@ -354,18 +375,16 @@ class TrafficDiffuser(nn.Module):
         
         return x
     
-    def forward_with_cfg(self, x, t, h, mp, cfg_scale):
+    def forward_with_cfg(self, x, t, h, cond_mp, cfg_scale):
         """
-        Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
+        Forward pass of TrafficDiffuser.
+        Also batches the unconditional forward pass for classifier-free guidance.
         """
-        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
-        half = x[: len(x) // 2]
-        combined = torch.cat([half, half], dim=0)
-        eps = self.forward(combined, t, h, mp)
-        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
-        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-        eps = torch.cat([half_eps, half_eps], dim=0)
-        return eps
+        uncond_mp = torch.zeros_like(cond_mp)
+        uncond_x = self.forward(x, t, h, uncond_mp)
+        cond_x = self.forward(x, t, h, cond_mp)
+        x = uncond_x + cfg_scale * (cond_x - uncond_x)
+        return x
 
 
 #################################################################################
