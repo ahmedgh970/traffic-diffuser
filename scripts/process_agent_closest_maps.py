@@ -6,7 +6,7 @@ from scipy.interpolate import interp1d
 
 def calculate_ade(traj1, traj2):
     return np.mean(np.linalg.norm(traj1 - traj2, axis=1))
-
+    
 def interpolate_to_fixed_length(traj, length, kind='linear'):
     current_length = traj.shape[0]
     x = np.linspace(0, 1, current_length)
@@ -63,16 +63,17 @@ def select_vmap(scenario, map_features, num_selected_features):
 
 
 if __name__ == "__main__":
-    scene_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/tracks/train_nag4'
+    scene_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/tracks/test_nag4'
     vmap_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/full'
-    output_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/filtered/multi_nag4_s46'
+    output_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/filtered/multi_nag4_s10'
     os.makedirs(output_dir, exist_ok=True)
-    num_selected_seg = 46
+    num_selected_seg = 10
     
     for filename in os.listdir(scene_dir):
         scene = np.load(os.path.join(scene_dir, filename))
         vmap = np.load(os.path.join(vmap_dir, filename))
         print('Initial shape of the vector map', vmap.shape)
+        scene = scene[:, 7:, :]
         selected_vmap = select_vmap(scene, vmap, num_selected_seg)
         print('Shape of the filtered vector map', selected_vmap.shape)
         np.save(os.path.join(output_dir, filename), selected_vmap)
