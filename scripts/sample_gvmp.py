@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import os
 import time
 import yaml
@@ -179,38 +180,25 @@ def main(config):
             
         # history
         h = data[:, :, :hist_length, :]
-        # for cfg        
-        h = torch.cat([h, h], 0)
         
         # map
         if use_map_embed:
             mp = np.load(os.path.join(config['data']['map_dir'], filename))
-            # if vector map
             mp = torch.tensor(mp, dtype=torch.float32).to(device)
             mp = mp.unsqueeze(0).expand(num_sampling, *mp.shape)
-            # for cfg
-            filename_null = 'sd_nuscenes_v1.0-trainval_scene-0652.npy'
-            mp_null = np.load(os.path.join(config['data']['map_dir'], filename_null))
-            mp_null = torch.tensor(mp_null, dtype=torch.float32).to(device)
-            mp_null = mp_null.unsqueeze(0).expand(num_sampling, *mp_null.shape)
-            mp = torch.cat([mp, mp_null], 0)
         else:
-            mp = None
-                  
+            mp = None                 
         
         # Create sampling noise:
         x = torch.randn(num_sampling, num_agents, seq_length, dim_size, device=device)
-        # for cfg
-        x = torch.cat([x, x], 0)
         
         # kwargs
-        model_kwargs = dict(h=h, mp=mp, cfg_scale=config['sample']['cfg_scale'])  
+        model_kwargs = dict(h=h, cond_mp=mp, cfg_scale=config['sample']['cfg_scale'])  
         
         # Sample trajectories:
         samples = diffusion.p_sample_loop(
             model.forward_with_cfg, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
         )
-        samples, _ = samples.chunk(2, dim=0)  # Remove null samples
         samples = samples.cpu().numpy()
         
         # Save sampled trajectories
