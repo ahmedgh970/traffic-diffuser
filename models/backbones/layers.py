@@ -168,12 +168,6 @@ def get_1d_sincos_pos_embed(embed_dim, pos):
     return emb
 
 
-
-
-
-
-#############################
-'''
 class ResBlock(nn.Module):
     """Residual block with Conv1D and GroupNorm."""
     def __init__(self, in_dim, out_dim, time_emb_dim):
@@ -187,9 +181,8 @@ class ResBlock(nn.Module):
     
     def forward(self, x, c):
         # [(B*N, H, L), (B*N, H)]
-        c = self.time_mlp(c).unsqueeze(-1)  # (B*N, H) → (B*N, H, 1)
+        c = self.time_mlp(c).unsqueeze(-1)  # (B*N, H) → (B*N, H', 1)
         x_res = self.residual(x)
-        print('shape of c', c.shape)
         x = self.conv1(F.gelu(self.norm1(x))) + c
         x = self.conv2(F.gelu(self.norm2(x))) + x_res
         return x
@@ -226,7 +219,7 @@ class UpBlock(nn.Module):
     def __init__(self, in_dim, out_dim, time_emb_dim, num_heads, use_attn=False):
         super().__init__()
         self.use_attn = use_attn
-        self.res_block = ResBlock(in_dim, out_dim, time_emb_dim)
+        self.res_block = ResBlock(out_dim, out_dim, time_emb_dim)
         if use_attn:
             self.attn = nn.MultiheadAttention(
                 embed_dim=out_dim,
@@ -236,13 +229,9 @@ class UpBlock(nn.Module):
         self.upsample = nn.ConvTranspose1d(in_dim, out_dim, kernel_size=4, stride=2, padding=1)
 
     def forward(self, x, c, skip):
-        print(x.shape)
-        print(skip.shape)
         x = x + skip
         x = self.upsample(x)
-        print(x.shape)
         x = self.res_block(x, c)
-        print(x.shape)
         if self.use_attn:
             x = x.permute(0, 2, 1)
             x = x + self.attn(query=x,
@@ -258,9 +247,7 @@ class UNet1D(nn.Module):
     """1D U-Net for Trajectory Denoising."""
     def __init__(self, input_dim, hidden_dims=[64, 128, 256, 512], time_emb_dim=64, num_heads=8):
         super().__init__()
-        
         self.init_conv = nn.Conv1d(input_dim, hidden_dims[0], kernel_size=3, padding=1)
-
         self.down_blocks = nn.ModuleList()
         self.up_blocks = nn.ModuleList()
 
@@ -268,10 +255,8 @@ class UNet1D(nn.Module):
         dims = [hidden_dims[0]] + hidden_dims
         for i in range(len(hidden_dims)):
             self.down_blocks.append(DownBlock(dims[i], dims[i+1], time_emb_dim, num_heads, use_attn=(i >= 1)))
-
         # Bottleneck
         self.bottleneck = ResBlock(dims[-1], dims[-1], time_emb_dim)
-
         # Upsampling
         rev_dims = list(reversed(dims))
         for i in range(len(hidden_dims)):
@@ -281,30 +266,15 @@ class UNet1D(nn.Module):
 
     def forward(self, x, c):
         # (B*N, L, H)
-        x = x.permute(0, 2, 1)  # Convert to (B, H, L) for Conv1D
+        #x = x.permute(0, 2, 1)  # Convert to (B, H, L) for Conv1D
         skips = []
         x = self.init_conv(x)
-
         for down in self.down_blocks:
             x = down(x, c)
             skips.append(x)
-        print(len(skips))
-        print(x.shape)
         x = self.bottleneck(x, c)
-        print(x.shape)
         for up in self.up_blocks:
             x = up(x, c, skips.pop())
-
         x = self.final_conv(x)
-        x = x.permute(0, 2, 1)  # Back to (B*N, L, H)
+        #x = x.permute(0, 2, 1)  # Back to (B*N, L, H)
         return x
-
-def test_unet_forward():
-    model = UNet1D(input_dim=2)
-    x = torch.randn(16, 64, 2)
-    c = torch.randn(16, 64)
-    output = model(x, c)
-    assert output.shape == (16, 64, 2)
-
-test_unet_forward()
-'''

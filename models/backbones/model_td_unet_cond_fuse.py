@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
-from models.backbones.layers import modulate, AdaTransformerEnc, AdaTransformerDec, MapTransformerEnc, init, get_1d_sincos_pos_embed
+from models.backbones.layers import modulate, UNet1D, MapTransformerEnc, init, get_1d_sincos_pos_embed
 
 
 
@@ -257,19 +257,19 @@ class TrafficDiffuser(nn.Module):
                 hidden_size=hidden_size,
                 map_attr=dim_size,
                 dropout_prob=map_dropout_prob,)
-            self.pool = AttentionPooling(hidden_size, hidden_size) 
+            #self.pool = AttentionPooling(hidden_size, hidden_size) 
             self.condition_fuser = nn.Sequential(
                 nn.Linear(2*hidden_size, hidden_size),
                 nn.GELU())
         
         #--- Temporal Attention
-        self.t_pos_embed = nn.Parameter(
-            torch.zeros(1, self.scene_length, hidden_size), 
-            requires_grad=False,)  
-        self.enc_blocks = nn.ModuleList([
-            AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)])
-        self.dec_blocks = nn.ModuleList([
-            AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)])          
+        #self.t_pos_embed = nn.Parameter(
+        #    torch.zeros(1, self.scene_length, hidden_size), 
+        #    requires_grad=False,)  
+        self.unet = UNet1D(
+            input_dim=self.scene_length,
+            hidden_dims=[hidden_size, 128, 256, 512],
+            time_emb_dim=hidden_size, num_heads=num_heads)     
         
         #--- Final Layer         
         self.final_layer = FinalLayer(num_agents, hist_length, seq_length, dim_size, hidden_size)   
@@ -285,21 +285,21 @@ class TrafficDiffuser(nn.Module):
         self.apply(_basic_init)
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
-        pos = np.arange(self.scene_length)
-        pos_embed = get_1d_sincos_pos_embed(self.hidden_size, pos)
-        self.t_pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        #pos = np.arange(self.scene_length)
+        #pos_embed = get_1d_sincos_pos_embed(self.hidden_size, pos)
+        #self.t_pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
         
+        # Initialize the first linear layer:
+        nn.init.normal_(self.proj1.weight, std=0.02)
+
         # Zero-out adaLN modulation layers for t_block:
-        for block in self.enc_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-        for block in self.dec_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+        #for block in self.enc_blocks:
+        #    nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+        #    nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
             
         # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
@@ -351,21 +351,12 @@ class TrafficDiffuser(nn.Module):
         ################# Temporal Attention ########################
         # (B, N, L, H), (B*N, H), (B, N, S, P, D)
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
-        x = x + self.t_pos_embed                        # (B*N, L, H)       
-        if self.use_ckpt_wrapper:
-            for block in self.enc_blocks:
-                x = torch.utils.checkpoint.checkpoint(
-                    self.ckpt_wrapper(block),
-                    x, c, use_reentrant=False)          # (B*N, L, H)
-            for block in self.dec_blocks:
-                x = torch.utils.checkpoint.checkpoint(
-                    self.ckpt_wrapper(block),
-                    x, c, use_reentrant=False)          # (B*N, L, H)
+        if self.use_ckpt_wrapper:       
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(self.unet),
+                x, c, use_reentrant=False)              # (B*N, L, H)
         else:
-            for block in self.enc_blocks:
-                x = block(x, c)                         # (B*N, L, H)          
-            for block in self.dec_blocks:
-                x = block(x, c)                         # (B*N, L, H)
+            x = self.unet(x, c)                         # (B*N, L, H)
         #############################################################
         
         ##################### Final layer ###########################
@@ -392,13 +383,13 @@ class TrafficDiffuser(nn.Module):
 #################################################################################
 
 def TrafficDiffuser_L(**kwargs):
-    return TrafficDiffuser(hidden_size=512, num_heads=16, depth=16, **kwargs)
+    return TrafficDiffuser(hidden_size=256, num_heads=16, depth=16, **kwargs)
 
 def TrafficDiffuser_B(**kwargs):
-    return TrafficDiffuser(hidden_size=384, num_heads=12, depth=12, **kwargs)
+    return TrafficDiffuser(hidden_size=128, num_heads=12, depth=12, **kwargs)
 
 def TrafficDiffuser_S(**kwargs):
-    return TrafficDiffuser(hidden_size=128, num_heads=8, depth=8, **kwargs)
+    return TrafficDiffuser(hidden_size=64, num_heads=8, depth=8, **kwargs)
 
 TrafficDiffuser_models = {
     'TrafficDiffuser-L': TrafficDiffuser_L,

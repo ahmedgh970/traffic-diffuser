@@ -1,4 +1,3 @@
-import os
 import math
 import torch
 import torch.nn as nn
@@ -48,8 +47,8 @@ class TimestepEmbedder(nn.Module):
     def forward(self, t):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         t_emb = self.mlp(t_freq)
-        return t_emb
-                                        
+        return t_emb                                
+
 class MapEncoderPtsMA(nn.Module):
     '''
     This class operates on the multi-agent road lanes provided as a tensor with shape
@@ -73,14 +72,17 @@ class MapEncoderPtsMA(nn.Module):
             init_(nn.Linear(hidden_size, hidden_size*3)), nn.ReLU(), nn.Dropout(0.1),
             init_(nn.Linear(hidden_size*3, hidden_size)),
         )
+        #self.null_token = nn.Parameter(torch.randn(4, 10, 128, 2), requires_grad=True)
+        self.null_token = nn.Parameter(torch.Tensor(4, 10, 128, 2), requires_grad=True)
+        nn.init.xavier_uniform_(self.null_token)
         self.dropout_prob = dropout_prob
 
     def token_drop(self, roads):
         drop_mask = torch.rand(roads.shape[0]) < self.dropout_prob
-        roads[drop_mask] = torch.zeros_like(roads[drop_mask])
+        roads[drop_mask] = self.null_token.expand_as(roads[drop_mask])
         return roads
     
-    def forward(self, roads, train=False):
+    def forward(self, roads, train):
         '''
         :param roads: (B, N, S, P, k_attr) where B is batch size,
                                                 N is the number of agents, 
@@ -116,7 +118,7 @@ class MapEncoderPtsMA(nn.Module):
         road_seg_emb2 = road_seg_emb + self.map_feats(road_seg_emb)     # (B*N*S, 1, H)
         road_seg_emb2 = self.norm2(road_seg_emb2)                       # (B*N*S, 1, H)
         road_seg_emb = road_seg_emb2.view(B*N, S, -1)                   # (B*N, S, H)
-        return road_seg_emb   
+        return road_seg_emb  
 
 class MapEncoderPtsMA_v2(nn.Module):
     '''
@@ -127,20 +129,20 @@ class MapEncoderPtsMA_v2(nn.Module):
                  num_heads=8, depth=4, mlp_ratio=4.0,):
         super().__init__()
         init_ = lambda m: init(m, nn.init.xavier_normal_, lambda x: nn.init.constant_(x, 0), np.sqrt(2))
-        num_segments = 10
-        map_seeds = nn.Parameter(torch.Tensor(1, num_segments, 1, hidden_size), requires_grad=True)
-        nn.init.xavier_uniform_(map_seeds)
-        self.map_seeds = map_seeds.reshape(-1, 1, hidden_size)  # (S, 1, H)
+        self.map_seeds = nn.Parameter(torch.Tensor(1, 1, hidden_size), requires_grad=True)
         nn.init.xavier_uniform_(self.map_seeds)
         self.road_pts_lin = nn.Sequential(init_(nn.Linear(map_attr, hidden_size)))
         self.enc_blocks = nn.ModuleList([
             MapTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
+        self.null_token = nn.Parameter(torch.randn(4, 10, 128, 2), requires_grad=True)
+        #self.null_token = nn.Parameter(torch.Tensor(4, 10, 128, 2), requires_grad=True)
+        #nn.init.xavier_uniform_(self.null_token)
         self.dropout_prob = dropout_prob
 
     def token_drop(self, roads):
         drop_mask = torch.rand(roads.shape[0]) < self.dropout_prob
-        roads[drop_mask] = torch.zeros_like(roads[drop_mask])
+        roads[drop_mask] = self.null_token.expand_as(roads[drop_mask])
         return roads
     
     def forward(self, roads, train):
@@ -165,11 +167,11 @@ class MapEncoderPtsMA_v2(nn.Module):
         # Combine information from each road segment using cross attention 
         # with agent contextual embeddings as queries.
         road_pts_feats = self.road_pts_lin(roads).view(B*N*S, P, -1)                       # (B*N*S, P, H)
-        map_seeds = self.map_seeds.repeat(B*N, 1, 1).to(road_pts_feats.device)             # (B*N*S, 1, H)
+        map_seeds = self.map_seeds.repeat(B*N*S, 1, 1).to(road_pts_feats.device)           # (B*N*S, 1, H)
         for block in self.enc_blocks:
             map_seeds = block(map_seeds, road_pts_feats, road_pts_mask)                    # (B*N*S, 1, H)
         road_seg_emb = map_seeds.view(B*N, S, -1)                                          # (B*N, S, H)
-        return road_seg_emb   
+        return road_seg_emb  
 
 
 #################################################################################
@@ -201,8 +203,7 @@ class FinalLayer(nn.Module):
         x = x.reshape(
             -1, self.num_agents, 
             self.hist_length + self.seq_length, 
-            self.dim_size,
-        )                                                           # (B, N, L, D)
+            self.dim_size,)                                         # (B, N, L, D)
         x = x[:, :, self.hist_length:, :]                           # (B, N, L_x, D)
         return x
     
@@ -224,7 +225,7 @@ class TrafficDiffuser(nn.Module):
         mlp_ratio=4.0,
         map_dropout_prob=0.1,
     ):
-        super().__init__()  
+        super().__init__()          
         self.hidden_size = hidden_size
         self.use_map_embed = use_map_embed
         self.use_ckpt_wrapper = use_ckpt_wrapper
@@ -234,10 +235,13 @@ class TrafficDiffuser(nn.Module):
         #--- Embedders
         self.t_embedder = TimestepEmbedder(hidden_size) 
         if use_map_embed:
-            self.m_embedder = MapEncoderPtsMA_v2(
+            self.m_embedder = MapEncoderPtsMA(
                 hidden_size=hidden_size,
                 map_attr=dim_size,
-                dropout_prob=map_dropout_prob,)
+                dropout_prob=map_dropout_prob,) 
+            self.condition_fuser = nn.Sequential(
+                nn.Linear(2*hidden_size, hidden_size),
+                nn.GELU())
         
         #--- Temporal Attention
         self.t_pos_embed = nn.Parameter(
@@ -246,7 +250,7 @@ class TrafficDiffuser(nn.Module):
         self.enc_blocks = nn.ModuleList([
             AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)])
         self.dec_blocks = nn.ModuleList([
-            AdaTransformerDec(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)])          
+            AdaTransformerEnc(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)])          
         
         #--- Final Layer         
         self.final_layer = FinalLayer(num_agents, hist_length, seq_length, dim_size, hidden_size)   
@@ -265,10 +269,7 @@ class TrafficDiffuser(nn.Module):
         pos = np.arange(self.scene_length)
         pos_embed = get_1d_sincos_pos_embed(self.hidden_size, pos)
         self.t_pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # Initialize the first linear layer:
-        nn.init.normal_(self.proj1.weight, std=0.02)
-
+        
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
@@ -319,48 +320,52 @@ class TrafficDiffuser(nn.Module):
         if self.use_map_embed:
             cm = self.m_embedder(
                 mp, train=self.training)                # (B*N, S, H)
+            c = self.condition_fuser(torch.cat(
+                [ct, cm.mean(dim=1)], dim=-1))          # (B*N, H)
         else:
             cm = None
+            c = ct                                               
         #############################################################
         
         ################# Temporal Attention ########################
         # (B, N, L, H), (B*N, H), (B, N, S, P, D)
         x = x.reshape(B*N, L, H)                        # (B*N, L, H)
-        x = x + self.t_pos_embed                        # (B*N, L, H)
-        
+        x = x + self.t_pos_embed                        # (B*N, L, H)       
         if self.use_ckpt_wrapper:
             for block in self.enc_blocks:
                 x = torch.utils.checkpoint.checkpoint(
                     self.ckpt_wrapper(block),
-                    x, ct, use_reentrant=False)          # (B*N, L, H)
+                    x, c, use_reentrant=False)          # (B*N, L, H)
             for block in self.dec_blocks:
                 x = torch.utils.checkpoint.checkpoint(
                     self.ckpt_wrapper(block),
-                    x, ct, cm, use_reentrant=False)      # (B*N, L, H)
+                    x, c, use_reentrant=False)          # (B*N, L, H)
         else:
             for block in self.enc_blocks:
-                x = block(x, ct)                         # (B*N, L, H)          
+                x = block(x, c)                         # (B*N, L, H)          
             for block in self.dec_blocks:
-                x = block(x, ct, cm)                     # (B*N, L, H)
+                x = block(x, c)                         # (B*N, L, H)
         #############################################################
         
         ##################### Final layer ###########################
         # (B*N, L, H), (B*N, H)
-        x = self.final_layer(x, ct)                      # (B, N, L_x, D)
+        x = self.final_layer(x, c)                      # (B, N, L_x, D)
         #############################################################
         
         return x
     
-    def forward_with_cfg(self, x, t, h, cond_mp, cfg_scale):
+    def forward_with_cfg(self, x, t, h, mp, cfg_scale):
         """
-        Forward pass of TrafficDiffuser.
-        Also batches the unconditional forward pass for classifier-free guidance.
+        Forward pass of TrafficDiffuser, but also batches the unconditional forward pass for classifier-free guidance.
         """
-        uncond_mp = torch.zeros_like(cond_mp)
-        uncond_x = self.forward(x, t, h, uncond_mp)
-        cond_x = self.forward(x, t, h, cond_mp)
-        x = uncond_x + cfg_scale * (cond_x - uncond_x)
-        return x
+        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
+        half = x[: len(x) // 2]
+        combined = torch.cat([half, half], dim=0)
+        eps = self.forward(combined, t, h, mp)
+        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
+        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+        eps = torch.cat([half_eps, half_eps], dim=0)
+        return eps
 
 
 #################################################################################
