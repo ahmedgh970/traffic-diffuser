@@ -168,6 +168,7 @@ def get_1d_sincos_pos_embed(embed_dim, pos):
     return emb
 
 
+############### UNet1D ################
 class ResBlock(nn.Module):
     """Residual block with Conv1D and GroupNorm."""
     def __init__(self, in_dim, out_dim, time_emb_dim):
@@ -278,3 +279,89 @@ class UNet1D(nn.Module):
         x = self.final_conv(x)
         #x = x.permute(0, 2, 1)  # Back to (B*N, L, H)
         return x
+
+
+################ MTR PointNetPolylineEncoder ################    
+def get_batch_offsets(batch_idxs, bs):
+    '''
+    :param batch_idxs: (N), int
+    :param bs: int
+    :return: batch_offsets: (bs + 1)
+    '''
+    batch_offsets = torch.zeros(bs + 1).int().cuda()
+    for i in range(bs):
+        batch_offsets[i + 1] = batch_offsets[i] + (batch_idxs == i).sum()
+    assert batch_offsets[-1] == batch_idxs.shape[0]
+    return batch_offsets
+
+def build_mlps(c_in, mlp_channels=None, ret_before_act=False, without_norm=False):
+    layers = []
+    num_layers = len(mlp_channels)
+
+    for k in range(num_layers):
+        if k + 1 == num_layers and ret_before_act:
+            layers.append(nn.Linear(c_in, mlp_channels[k], bias=True))
+        else:
+            if without_norm:
+                layers.extend([nn.Linear(c_in, mlp_channels[k], bias=True), nn.ReLU()])
+            else:
+                layers.extend(
+                    [nn.Linear(c_in, mlp_channels[k], bias=False), nn.LayerNorm(mlp_channels[k]), nn.ReLU()])
+            c_in = mlp_channels[k]
+
+    return nn.Sequential(*layers)
+
+class PointNetPolylineEncoder(nn.Module):
+    def __init__(self, in_channels, hidden_dim, num_layers=3, num_pre_layers=1, out_channels=None, map_dropout_prob=0.1):
+        super().__init__()
+        self.pre_mlps = build_mlps(
+            c_in=in_channels,
+            mlp_channels=[hidden_dim] * num_pre_layers,
+            ret_before_act=False
+        )
+        self.mlps = build_mlps(
+            c_in=hidden_dim * 2,
+            mlp_channels=[hidden_dim] * (num_layers - num_pre_layers),
+            ret_before_act=False
+        )
+
+        if out_channels is not None:
+            self.out_mlps = build_mlps(
+                c_in=hidden_dim, mlp_channels=[hidden_dim, out_channels],
+                ret_before_act=True, without_norm=True
+            )
+        else:
+            self.out_mlps = None
+        self.map_dropout_prob = map_dropout_prob
+
+    def token_drop(self, polylines):
+        drop_mask = torch.rand(polylines.shape[0]) < self.map_dropout_prob
+        polylines[drop_mask] = torch.zeros_like(polylines[drop_mask])
+        return polylines
+
+    def forward(self, polylines, train):
+        """
+        Args:
+            polylines (batch_size, num_agents, num_polylines, num_points_each_polylines, map_attr):
+        Returns:
+        """
+        if (train and self.map_dropout_prob > 0):
+            polylines = self.token_drop(polylines) 
+        polylines = polylines.reshape(-1, *polylines.shape[2:])  # (BN, num_polylines, num_points_each_polylines, map_attr)
+
+        # pre-mlp
+        polylines_feature = self.pre_mlps(polylines)
+
+        # get global feature
+        pooled_feature = polylines_feature.max(dim=2)[0] # (BN, num_polylines, H)
+        polylines_feature = torch.cat(
+            (polylines_feature, pooled_feature[:, :, None, :].repeat(1, 1, polylines.shape[2], 1)), dim=-1)
+
+        # mlp
+        feature_buffers = self.mlps(polylines_feature)
+
+        if self.out_mlps is not None:
+            # max-pooling
+            feature_buffers = feature_buffers.max(dim=2)[0]  # (BN, num_polylines, H)
+            feature_buffers = self.out_mlps(feature_buffers)  # (BN, num_polylines, C_out)
+        return feature_buffers
