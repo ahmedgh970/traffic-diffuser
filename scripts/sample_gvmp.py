@@ -183,9 +183,11 @@ def main(config):
         
         # map
         if use_map_embed:
-            mp = np.load(os.path.join(config['data']['map_dir'], filename))
-            mp = torch.tensor(mp, dtype=torch.float32).to(device)
-            mp = mp.unsqueeze(0).expand(num_sampling, *mp.shape)
+            #mp = np.load(os.path.join(config['data']['map_dir'], filename))
+            #mp = torch.tensor(mp, dtype=torch.float32).to(device)
+            #mp = mp.unsqueeze(0).expand(num_sampling, *mp.shape)
+            num_segments = 16
+            mp = torch.zeros(num_sampling, num_agents, num_segments, 128, 2).to(device)
         else:
             mp = None                 
         
@@ -193,11 +195,11 @@ def main(config):
         x = torch.randn(num_sampling, num_agents, seq_length, dim_size, device=device)
         
         # kwargs
-        model_kwargs = dict(h=h, cond_mp=mp, cfg_scale=config['sample']['cfg_scale'])  
+        model_kwargs = dict(h=h, mp=mp)  
         
         # Sample trajectories:
         samples = diffusion.p_sample_loop(
-            model.forward_with_cfg, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            model.forward, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
         )
         samples = samples.cpu().numpy()
         
