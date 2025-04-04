@@ -2,8 +2,37 @@ import os
 import numpy as np
 from scenarionet import read_dataset_summary, read_scenario
 
+
+def interpolate_to_fixed_length(data, fixed_length=11):
+    """
+    Interpolates a variable-length numpy array to a fixed length.
+
+    Parameters:
+        data (np.ndarray): The input array of shape (N, L, 2) where L is between 90 and 94.
+        fixed_length (int): The desired fixed length (default is 11).
+
+    Returns:
+        np.ndarray: Interpolated array of shape (N, fixed_length, 2).
+    """
+    # Extract dimensions
+    N, L, D = data.shape
+    
+    # Prepare the interpolated array
+    interpolated_data = np.zeros((N, fixed_length, D))
+    
+    # Loop over each sequence (agent)
+    for i in range(N):
+        # Generate the fixed-length indices
+        fixed_indices = np.linspace(0, L - 1, fixed_length)
+
+        # Interpolate for each dimension (x and y)
+        for j in range(D):
+            interpolated_data[i, :, j] = np.interp(fixed_indices, np.arange(L), data[i, :, j])
+    
+    return interpolated_data
+
 # --- Function: Preprocess scenarios ---
-def extract_process_scenario(scenario_name, mapping, dataset_path, min_distance, step):
+def extract_process_scenario(scenario_name, mapping, dataset_path, min_tdist, seq_length):
     """
     Extract, sample, and filter tracks for a given scenario.
 
@@ -11,8 +40,8 @@ def extract_process_scenario(scenario_name, mapping, dataset_path, min_distance,
         scenario_name (str): Name of the scenario file.
         mapping (dict): Dataset mapping information.
         dataset_path (str): Path to the dataset.
-        min_distance (float): Minimum travel distance to filter stationary agents.
-        step (int): Step size for sampling sequence length.
+        min_tdist (float): Minimum travel distance to filter stationary agents.
+        seq_length (int): The desired sequence length to interpolate to.
 
     Returns:
         np.ndarray: Preprocessed tracks.
@@ -25,27 +54,36 @@ def extract_process_scenario(scenario_name, mapping, dataset_path, min_distance,
         for track_data in scenario['tracks'].values()
         if track_data['type'] in {'PEDESTRIAN', 'CYCLIST', 'VEHICLE'}
     ]
-    tracks_data = np.array(tracks_list)
+    tracks = np.array(tracks_list)
 
     # Sample tracks to fixed sequence length
-    print('original tracks shape:', tracks_data.shape)
-    tracks_sampled = tracks_data[:, ::step, :]
-    print('sampled tracks shape:', tracks_sampled.shape)
+    print('original tracks shape:', tracks.shape)
+    tracks_data = interpolate_to_fixed_length(tracks, seq_length)
+    tracks_data = tracks_data[:, :11, :]
+    print('interp tracks shape:', tracks_data.shape)
     
-    # Remove stationary agents
-    def calculate_traveled_distance(tracks):
+    # Fct to calculate the agents traveled distances in a scenario
+    def traveled_distances(tracks):
         non_padded_mask = ~(np.all(tracks == 0.0, axis=2))
         diffs = np.diff(tracks, axis=1)
         valid_diffs_mask = non_padded_mask[:, :-1] & non_padded_mask[:, 1:]
         distances = np.linalg.norm(diffs * valid_diffs_mask[:, :, np.newaxis], axis=2)
         return distances.sum(axis=1)
+    
+    # Remove stationary agents
+    h3_tdist = traveled_distances(tracks_data[:, :3, :])
+    h6_tdist = traveled_distances(tracks_data[:, :6, :])
+    h8_tdist = traveled_distances(tracks_data[:, :8, :])
+    f8_tdist = traveled_distances(tracks_data[:, 3:, :])
+    f5_tdist = traveled_distances(tracks_data[:, 6:, :])
+    f3_tdist = traveled_distances(tracks_data[:, 8:, :]) 
 
-    tracks_sampled_history, tracks_sampled_future = tracks_sampled[:, :8, :], tracks_sampled[:, 8:, :]
-    history_traveled_distance = calculate_traveled_distance(tracks_sampled_history)
-    future_traveled_distance = calculate_traveled_distance(tracks_sampled_future)
+    non_stationary = (h3_tdist >= 3*min_tdist) & (h6_tdist >= 6*min_tdist) & (h8_tdist >= 8*min_tdist) & \
+        (f3_tdist >= 3*min_tdist) & (f5_tdist >= 5*min_tdist) & (f8_tdist >= 8*min_tdist)
 
-    non_stationary = (history_traveled_distance > min_distance) & (future_traveled_distance > min_distance)
-    return tracks_sampled[non_stationary]
+    tracks_filtered = tracks_data[non_stationary]
+    print(tracks_filtered.shape)
+    return tracks_filtered
 
 # --- Function: Calculate dataset statistics ---
 def calculate_dataset_statistics(dataset_path):
@@ -92,12 +130,12 @@ def main():
     Main pipeline for preprocessing scenarios, calculating dataset statistics,
     and standardizing/scaling tracks.
     """
-    dataset_path = '/data/tii/data/waymo/pkl'
-    output_path = '/data/tii/data/waymo/npy'
+    dataset_path = '/data/tii/data/argoverse/converted/train'
+    output_path = '/data/tii/data/argoverse/tracks/train'
     os.makedirs(output_path, exist_ok=True)
     
-    min_distance = 4      # Empirically determined for all datasets
-    step = 16             # Depends on the original dataset scenario length
+    min_tdist = 1.4       # Average humain walking speed is approximately 1.4 meters per second (m/s)
+    seq_length = 11       # Desired sequence length to train and test on (can be padded)
     scale_factor = 100    # Empirically determined for all datasets
 
     _, scenario_ids, mapping = read_dataset_summary(dataset_path)
@@ -105,7 +143,7 @@ def main():
     # Preprocess
     for scenario_name in scenario_ids:
         processed_scenario = extract_process_scenario(
-            scenario_name, mapping, dataset_path, min_distance=min_distance, step=step
+            scenario_name, mapping, dataset_path, min_tdist=min_tdist, seq_length=seq_length
         )
         if processed_scenario.shape[0] != 0:
             np.save(os.path.join(output_path, scenario_name.replace('.pkl', '.npy')), processed_scenario)
@@ -113,11 +151,19 @@ def main():
     
     # Standardize and scale
     mean, std = calculate_dataset_statistics(output_path)
-    for scenario_name in os.listdir(output_path):
-        tracks = np.load(os.path.join(output_path, scenario_name))
-        tracks = standardize_scale_scenario(tracks, mean, std, scale_factor)
-        np.save(os.path.join(output_path, scenario_name), tracks)
-        print(f"Standardized and saved {scenario_name}")
+    print(f'Mean and Std of {dataset_path} are {mean}, {std}')
+
+    #mean std waymo  test (  3216 scenarios): [3240.8403 -1223.581 ], [4763.5854 7425.6807]
+    #mean std waymo   val ( 38893 scenarios): [1858.37536787  182.94590295], [5135.1373848  6249.50271563]
+    #mean std waymo train ( 20381 scenarios): [1950.73361793   43.52144113], [4952.30518218 6199.31435426]
+    #mean std av2     val ( 21019 scenarios): [2715.46187142 1115.21668011], [3207.57265044 1713.16773775]
+    #mean srd av2   train (168642 scenarios): [2703.13563645 1109.97885848], [3215.34663433 1710.57264542]
+
+    #for scenario_name in os.listdir(output_path):
+    #    tracks = np.load(os.path.join(output_path, scenario_name))
+    #    tracks = standardize_scale_scenario(tracks, mean, std, scale_factor)
+    #    np.save(os.path.join(output_path, scenario_name), tracks)
+    #    print(f"Standardized and saved {scenario_name}")
 
 if __name__ == "__main__":
     main()

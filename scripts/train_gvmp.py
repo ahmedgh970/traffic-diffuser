@@ -12,6 +12,7 @@ import yaml
 import numpy as np
 from accelerate import Accelerator
 from diffusion import create_diffusion
+from torch.optim.lr_scheduler import LambdaLR
 
 
 
@@ -78,10 +79,11 @@ class CustomDataset(Dataset):
             f"Unexpected shape {data_tensor.shape} at index {idx}"
         
         map_npy = np.load(os.path.join(self.map_path, data_file))
+        map_npy = map_npy[:self.num_agents, :, :, :]
         map_tensor = torch.tensor(map_npy, dtype=torch.float32)
         # for vector map
-        #assert map_tensor.shape == (46, 128, 2), \
-        #    f"Unexpected shape {map_tensor.shape} at index {idx}"
+        assert map_tensor.shape == (self.num_agents, 16, 128, 2), \
+            f"Unexpected shape {map_tensor.shape} at index {idx}"
         return data_tensor, map_tensor
 
 
@@ -128,7 +130,7 @@ def main(config):
         seq_length=seq_length,
         dim_size=dim_size,
     )
-    #dataset = get_subset_loader(dataset, subset_size=config['data']['subset_size'])
+    dataset = get_subset_loader(dataset, subset_size=config['data']['subset_size'])
     loader = DataLoader(
         dataset,
         batch_size=int(config['train']['global_batch_size'] // accelerator.num_processes),
@@ -171,6 +173,17 @@ def main(config):
         lr=float(config['train']['learning_rate']),
         weight_decay=float(config['train']['weight_decay']),
     )
+
+    # Calculate total steps and create a warmup + linear decay scheduler:
+    total_steps = config['train']['epochs'] * len(loader)
+    warmup_steps = 10000  # 10^4 warmup steps
+    scheduler = LambdaLR(
+        opt,
+        lr_lambda=lambda step: min(
+            (step + 1) / warmup_steps,
+            max(0.0, (total_steps - step) / (total_steps - warmup_steps))
+        )
+    )
     
     # Prepare models for training:
     model.train()
@@ -199,6 +212,7 @@ def main(config):
             opt.zero_grad()
             accelerator.backward(loss)
             opt.step()
+            scheduler.step()
             
             # Log loss values:
             running_loss += loss.item()

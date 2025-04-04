@@ -128,13 +128,13 @@ def main(config):
     logging.info(f"{model_name} Parameters: {sum(p.numel() for p in model.parameters()):,}\n")
     logging.info(f"{model_name} Model summary:\n{model}\n")
     
-    ## Print model flops
+    # Print model flops
     #batch_size = 1 # to ensure flops and inference time are calculated for a single scenario
     #dummy_x = torch.randn(batch_size, num_agents, seq_length, dim_size, device=device)
     #dummy_t = torch.randn(batch_size, device=device)
     #dummy_h = torch.randn(batch_size, num_agents, hist_length, dim_size, device=device)
     #if use_map_embed:
-    #    dummy_m = torch.randn(batch_size, 128, 128, 2, device=device)
+    #    dummy_m = torch.randn(batch_size, num_agents, 16, 128, 2, device=device)
     #else: 
     #    dummy_m = None
     #flops = FlopCountAnalysis(model, (dummy_x, dummy_t, dummy_h, dummy_m))

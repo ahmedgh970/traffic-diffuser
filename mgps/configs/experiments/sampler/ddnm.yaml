@@ -1,7 +1,0 @@
-name: ddnm
-nsteps: 1000
-nsamples: 1
-
-
-parameters:
-  eta: 0.85

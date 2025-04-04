@@ -63,9 +63,9 @@ def select_vmap(scenario, map_features, num_selected_features):
 
 
 if __name__ == "__main__":
-    scene_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/tracks/train_nag4'
+    scene_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/tracks/original/test'
     vmap_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/full'
-    output_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/multi_nag4_s16'
+    output_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/agent_specific'
     os.makedirs(output_dir, exist_ok=True)
     num_selected_seg = 16
     
