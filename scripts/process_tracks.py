@@ -153,12 +153,6 @@ def main():
     mean, std = calculate_dataset_statistics(output_path)
     print(f'Mean and Std of {dataset_path} are {mean}, {std}')
 
-    #mean std waymo  test (  3216 scenarios): [3240.8403 -1223.581 ], [4763.5854 7425.6807]
-    #mean std waymo   val ( 38893 scenarios): [1858.37536787  182.94590295], [5135.1373848  6249.50271563]
-    #mean std waymo train ( 20381 scenarios): [1950.73361793   43.52144113], [4952.30518218 6199.31435426]
-    #mean std av2     val ( 21019 scenarios): [2715.46187142 1115.21668011], [3207.57265044 1713.16773775]
-    #mean srd av2   train (168642 scenarios): [2703.13563645 1109.97885848], [3215.34663433 1710.57264542]
-
     #for scenario_name in os.listdir(output_path):
     #    tracks = np.load(os.path.join(output_path, scenario_name))
     #    tracks = standardize_scale_scenario(tracks, mean, std, scale_factor)

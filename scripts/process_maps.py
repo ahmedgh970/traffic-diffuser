@@ -56,8 +56,7 @@ def slice_array_based_on_condition(arr, epsilon):
 
 # --- Function: Process map data ---
 def extract_process_map(scenario_name, mapping, dataset_path,
-                        num_ts_interm, num_ts_out, mean, std, 
-                        scale_factor):
+                        num_ts_interm, num_ts_out):
     """
     Extract and preprocess map features for a given scenario.
 
@@ -103,7 +102,7 @@ def extract_process_map(scenario_name, mapping, dataset_path,
 
     map_array = np.array(arr_list)
     # Standardize and scale processed map
-    map_array = (map_array - mean) / std * scale_factor
+    #map_array = (map_array - mean) / std * scale_factor
     return map_array
 
 
@@ -112,25 +111,29 @@ def main():
     """
     Main pipeline for processing map data from different datasets.
     """
-    dataset_path = "path/to/converted/dataset/pkl"
-    output_path = "path/to/processed/map/npy"
+    dataset_path = "/data/tii/data/waymo/converted/test"
+    reference_path = "/data/tii/data/waymo/tracks/test"
+    output_path = "/data/tii/data/waymo/maps/scene"
     os.makedirs(output_path, exist_ok=True)
     # default map processing settings
-    num_ts_interm, num_ts_out = 50000, 128
-    scale_factor = 100
+    num_ts_interm, num_ts_out = 25000, 128
+    #scale_factor = 100
     # nuScenes statistics
-    mean = [998.90979829, 1372.90628199]
-    std = [539.07656177, 463.67307649]
+    #mean = [998.90979829, 1372.90628199]
+    #std = [539.07656177, 463.67307649]
     
     _, scenario_ids, mapping = read_dataset_summary(dataset_path=dataset_path)
-    for scenario_name in scenario_ids:
+    i = 0
+    for scenario_name in os.listdir(reference_path):
+        scenario_pkl = scenario_name.replace('.npy', '.pkl')
         processed_map = extract_process_map(
-            scenario_name, mapping, dataset_path,
+            scenario_pkl, mapping, dataset_path,
             num_ts_interm, num_ts_out,
-            mean, std, scale_factor,
         )
-        file_path = os.path.join(output_path, scenario_name.replace('.pkl', '.npy'))
+        file_path = os.path.join(output_path, scenario_name)
         np.save(file_path, processed_map)
+        print(f"Processed map {i} and saved to {file_path}")
+        i += 1
 
 if __name__ == "__main__":
     main()

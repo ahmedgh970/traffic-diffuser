@@ -63,17 +63,19 @@ def select_vmap(scenario, map_features, num_selected_features):
 
 
 if __name__ == "__main__":
-    scene_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/tracks/original/test'
-    vmap_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/full'
-    output_dir = '/data/ahmed.ghorbel/workdir/autod/traffic-diffuser/data/maps/agent_specific'
+    scene_dir = '/data/tii/data/merged/tracks/test_waymo'
+    vmap_dir = '/data/tii/data/waymo/maps/scene'
+    output_dir = '/data/tii/data/merged/maps/agent_specific'
     os.makedirs(output_dir, exist_ok=True)
     num_selected_seg = 16
     
     for filename in os.listdir(scene_dir):
         scene = np.load(os.path.join(scene_dir, filename))
         vmap = np.load(os.path.join(vmap_dir, filename))
+        if vmap.shape[0] < num_selected_seg:
+            print(f'Warning: The vector map {filename} has fewer segments than the selected number.')
+            continue
         print('Initial shape of the vector map', vmap.shape)
-        scene = scene[:, :, :]
         selected_vmap = select_vmap(scene, vmap, num_selected_seg)
         print('Shape of the filtered vector map', selected_vmap.shape)
         np.save(os.path.join(output_dir, filename), selected_vmap)
