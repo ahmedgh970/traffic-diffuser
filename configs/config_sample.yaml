@@ -8,13 +8,13 @@ data:
   path: "/path/to/data/merged/tracks"
 
 sample:
-  num_sampling: 6
+  num_sampling: 10
   num_sampling_steps: 1000
   cuda_device: 2
   seed: 0
 
 model:
-  ckpt: "/path/to/traffic-diffuser/results/000-TrafficDiffuser-H/checkpoints/xxx.pt"
+  ckpt: "/path/to/results/000-TrafficDiffuser-H/checkpoints/xxx.pt"
   module: "models.backbones.model_td"
   class: "TrafficDiffuser_models"
   name: "TrafficDiffuser-H"
