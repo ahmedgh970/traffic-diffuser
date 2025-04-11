@@ -94,7 +94,7 @@ def main(config):
     ).to(device)
     
     # Load a TrafficDiffuser checkpoint:
-    state_dict = torch.load(config['model']['ckpt'], map_location=lambda storage, loc: storage)
+    state_dict = torch.load(config['model']['ckpt'], weights_only=True)
     model.load_state_dict(state_dict["model"])
     model.eval()  # important!
     print('===> Model initialized !')
@@ -132,8 +132,10 @@ def main(config):
         data = data[:num_agents]   
         # history
         h = data[:, :hist_length, :]
+        mask = np.all(h == 0.0, axis=(2))# Mask for padded agents and ts
         h = (h - mean_xy) / std_xy  # Standardization
         h *= scale_factor # Rescaling
+        h[mask] = 0
         h = torch.tensor(h, dtype=torch.float32).to(device)
         h = h.unsqueeze(0).expand(num_sampling, h.size(0), h.size(1), h.size(2))     
         # map
@@ -143,17 +145,16 @@ def main(config):
         else:
             mp = None
         # Create sampling noise:
-        # Use specific Gaussian noise based on dataset mean, std, and scale factor
         x = torch.randn(num_sampling, num_agents, seq_length, dim_size).to(device)
-        #x = np.random.rand(num_sampling, num_agents, seq_length, dim_size)
-        #x = (x * std_xy) + mean_xy  # Adjust noise to match dataset distribution
-        #x *= scale_factor  # Rescale to match dataset scaling
-        #x = torch.tensor(x, dtype=torch.float32).to(device)
     
         # Sample trajectories:
         model_kwargs = dict(h=h, mp=mp)
         samples = diffusion.p_sample_loop(
-            model.forward, x.shape, x, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            model.forward, x.shape, x,
+            clip_denoised=False,
+            model_kwargs=model_kwargs,
+            progress=False,
+            device=device
         )
         samples = samples.cpu().numpy()
 
@@ -222,7 +223,6 @@ def main(config):
         f"- Average MR_{num_sampling}={mean(MR_testset):.3f}"
     )
     print(f'====> End of sampling and evaluation.')
-    #"""
 
 
 if __name__ == "__main__":

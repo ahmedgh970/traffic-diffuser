@@ -70,8 +70,10 @@ class CustomDataset(Dataset):
         filename = self.filenames[idx]
         data_npy = np.load(os.path.join(self.data_path, filename))
         data_npy = data_npy[:self.num_agents, :, :self.dim_size]
+        mask_data = np.all(data_npy == 0.0, axis=(2))
         data_npy = (data_npy - self.mean) / self.std  # Standardization
         data_npy *= self.scale # Rescaling
+        data_npy[mask_data] = 0
 
         data_tensor = torch.tensor(data_npy, dtype=torch.float32)
         assert data_tensor.shape == (self.num_agents, self.hist_length + self.seq_length, self.dim_size), \
@@ -79,8 +81,10 @@ class CustomDataset(Dataset):
         
         map_npy = np.load(os.path.join(self.map_path, filename))
         map_npy = map_npy[:self.num_agents, :, :, :]
+        mask_map = np.all(map_npy == 0.0, axis=(3))
         map_npy = (map_npy - self.mean) / self.std  # Standardization
         map_npy *= self.scale # Rescaling
+        map_npy[mask_map] = 0
 
         map_tensor = torch.tensor(map_npy, dtype=torch.float32)
         assert map_tensor.shape == (self.num_agents, 16, 128, 2), \
@@ -125,14 +129,14 @@ def main(config):
     
     # Setup Dataloader
     dataset = CustomDataset(
-        data_path=config['data']['train_dir'],
-        map_path=config['data']['map_dir'],
+        data_path=config['data']['tracks_path'],
+        map_path=config['data']['maps_path'],
         num_agents=num_agents,
         hist_length=hist_length,
         seq_length=seq_length,
         dim_size=dim_size,
     )
-    sampler = RandomSampler(dataset, replacement=True, num_samples=config['data']['num_samples'])
+    sampler = RandomSampler(dataset, replacement=True, num_samples=config['data']['size'])
     loader = DataLoader(
         dataset,
         batch_size=int(config['train']['global_batch_size'] // accelerator.num_processes),
