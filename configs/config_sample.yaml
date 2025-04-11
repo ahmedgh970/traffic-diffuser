@@ -1,0 +1,25 @@
+data:
+  name: "test_waymo"
+  size:
+    test_waymo: 3215
+    val_waymo: 38868
+    val_av2: 20958
+    train: 100
+  path: "/path/to/data/merged/tracks"
+
+sample:
+  num_sampling: 6
+  num_sampling_steps: 1000
+  cuda_device: 2
+  seed: 0
+
+model:
+  ckpt: "/path/to/traffic-diffuser/results/000-TrafficDiffuser-H/checkpoints/xxx.pt"
+  module: "models.backbones.model_td"
+  class: "TrafficDiffuser_models"
+  name: "TrafficDiffuser-H"
+  num_agents: 10
+  seq_length: 5
+  hist_length: 6
+  dim_size: 2
+  use_map_embed: True  

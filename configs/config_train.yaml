@@ -1,0 +1,29 @@
+data:
+  train_dir: "/path/to/data/merged/tracks/train"
+  map_dir: "/path/to/data/merged/maps/agent_specific"
+  num_samples: 12000
+  
+train:
+  results_dir: "results"
+  epochs: 4000
+  warmup_steps: 10000
+  diffusion_steps: 1000
+  learning_rate: 5e-4
+  weight_decay: 0.03  
+  global_batch_size: 6
+  global_seed: 0
+  num_workers: 4
+  log_every: 2000
+  ckpt_every: 2000_000
+  seed: 0
+
+model:
+  module: "models.backbones.model_td"
+  class: "TrafficDiffuser_models"
+  name: "TrafficDiffuser-H"
+  num_agents: 10
+  seq_length: 5
+  hist_length: 6
+  dim_size: 2
+  use_map_embed: True
+  use_ckpt_wrapper: False 
