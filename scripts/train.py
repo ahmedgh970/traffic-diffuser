@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset, DataLoader, RandomSampler
+from torch.utils.data import Dataset, DataLoader, Sampler
 import torchvision.transforms as T
 import os
 import sys
@@ -45,10 +45,9 @@ def load_config(config_path):
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
     return config
-    
-    
+
 #################################################################################
-#                                Dataset                                        #
+#                         Custom Dataset and Dataloader                         #
 #################################################################################
 class CustomDataset(Dataset):
     def __init__(self, data_path, map_path, num_agents, hist_length, seq_length, dim_size):
@@ -74,25 +73,43 @@ class CustomDataset(Dataset):
         data_npy = (data_npy - self.mean) / self.std  # Standardization
         data_npy *= self.scale # Rescaling
         data_npy[mask_data] = 0
-
         data_tensor = torch.tensor(data_npy, dtype=torch.float32)
         assert data_tensor.shape == (self.num_agents, self.hist_length + self.seq_length, self.dim_size), \
             f"Unexpected shape {data_tensor.shape} at index {idx}"
-        
         map_npy = np.load(os.path.join(self.map_path, filename))
         map_npy = map_npy[:self.num_agents, :, :, :]
         mask_map = np.all(map_npy == 0.0, axis=(3))
         map_npy = (map_npy - self.mean) / self.std  # Standardization
         map_npy *= self.scale # Rescaling
         map_npy[mask_map] = 0
-
         map_tensor = torch.tensor(map_npy, dtype=torch.float32)
         assert map_tensor.shape == (self.num_agents, 16, 128, 2), \
             f"Unexpected shape {map_tensor.shape} at index {idx}"
-
         return data_tensor, map_tensor
 
+class DynamicSubsetSampler(Sampler):
+    """
+    Custom Sampler for dynamic subset sampling each epoch.
+    This sampler generates a new random set of indices from the dataset on every call
+    to __iter__. We also add a set_epoch() method so that different epochs yield different
+    subsets in a reproducible manner.
+    """
+    def __init__(self, data_source, subset_size, seed=0):
+        self.data_source = data_source
+        self.subset_size = subset_size
+        self.seed = seed
+        self.epoch = 0
 
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+
+    def __iter__(self):
+        rng = np.random.RandomState(self.seed + self.epoch)
+        indices = rng.choice(len(self.data_source), size=self.subset_size, replace=False)
+        return iter(indices)
+
+    def __len__(self):
+        return self.subset_size
 
 #################################################################################
 #                                  Training Loop                                #
@@ -108,12 +125,12 @@ def main(config):
     accelerator = Accelerator()
     device = accelerator.device
     
-    # Initialize var from config file
+    # Initialize vars from config file:
     num_agents = config['model']['num_agents']
     seq_length = config['model']['seq_length']
     hist_length = config['model']['hist_length']
     dim_size = config['model']['dim_size']
-    use_map_embed=config['model']['use_map_embed']   
+    use_map_embed = config['model']['use_map_embed']   
     model_name = config['model']['name']
     results_dir = config['train']['results_dir']
     
@@ -127,7 +144,7 @@ def main(config):
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
     
-    # Setup Dataloader
+    # Setup Dataloader:
     dataset = CustomDataset(
         data_path=config['data']['tracks_path'],
         map_path=config['data']['maps_path'],
@@ -136,7 +153,10 @@ def main(config):
         seq_length=seq_length,
         dim_size=dim_size,
     )
-    sampler = RandomSampler(dataset, replacement=True, num_samples=config['data']['size'])
+    if accelerator.is_main_process:
+        logger.info(f"Dataset contains {len(dataset):,} scenarios")
+    # Generate a new random subset of indices each epoch.
+    sampler = DynamicSubsetSampler(dataset, subset_size=config['data']['size'], seed=config['train']['seed'])
     loader = DataLoader(
         dataset,
         batch_size=int(config['train']['global_batch_size'] // accelerator.num_processes),
@@ -145,9 +165,7 @@ def main(config):
         pin_memory=True,
         drop_last=True,
     )
-    if accelerator.is_main_process:
-        logger.info(f"Dataset contains {len(dataset):,} scenarios")
-    
+
     # Create model:
     # Note that parameter initialization is done within the model constructor
     model_class = load_model(config['model']['module'], config['model']['class'])
@@ -164,7 +182,7 @@ def main(config):
     if accelerator.is_main_process:
         logger.info(f"Model summary:\n{model}")
     
-    # Create diffusion
+    # Create diffusion:
     diffusion = create_diffusion(
         timestep_respacing="",
         noise_schedule="linear",
@@ -195,7 +213,7 @@ def main(config):
     model.train()
     model, opt, loader = accelerator.prepare(model, opt, loader)
     
-    # Variables for monitoring/logging purposes:
+    # Variables for monitoring/logging:
     train_steps = 0
     log_steps = 0
     running_loss = 0
@@ -205,6 +223,10 @@ def main(config):
     if accelerator.is_main_process:
         logger.info(f"Training for {num_epochs} epochs...")
     for epoch in range(num_epochs):
+        # Update the sampler's epoch so that a new subset of data will be sampled.
+        # This ensures __iter__ in the sampler uses a different seed every epoch.
+        if hasattr(loader.sampler, "set_epoch"):
+            loader.sampler.set_epoch(epoch)
         if accelerator.is_main_process:
             logger.info(f"Beginning epoch {epoch}...")
         for data, mp in loader:
@@ -250,10 +272,8 @@ def main(config):
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
-
     if accelerator.is_main_process:
         logger.info("Done!")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
