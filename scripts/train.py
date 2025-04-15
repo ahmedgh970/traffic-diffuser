@@ -15,7 +15,6 @@ from diffusion import create_diffusion
 from torch.optim.lr_scheduler import LambdaLR
 
 
-
 #################################################################################
 #                             Helper Functions                                  #
 #################################################################################
@@ -30,7 +29,6 @@ def create_logger(logging_dir):
         handlers=[logging.StreamHandler(), logging.FileHandler(f"{logging_dir}/log.txt")]
     )
     logger = logging.getLogger(__name__)
-    
     return logger
 
 def load_model(module_name, class_name):
@@ -132,17 +130,19 @@ def main(config):
     dim_size = config['model']['dim_size']
     use_map_embed = config['model']['use_map_embed']   
     model_name = config['model']['name']
-    results_dir = config['train']['results_dir']
+    experiments_dir = config['train']['experiments_dir']
     
     # Setup an experiment folder:
     if accelerator.is_main_process:
-        os.makedirs(results_dir, exist_ok=True)
-        experiment_index = len(glob(f"{results_dir}/*"))
-        experiment_dir = f"{results_dir}/{experiment_index:03d}-{model_name}"
+        os.makedirs(experiments_dir, exist_ok=True)
+        experiment_index = len(glob(f"{experiments_dir}/*"))
+        experiment_dir = f"{experiments_dir}/{experiment_index:03d}-{model_name}"
         checkpoint_dir = f"{experiment_dir}/checkpoints"
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
+    else:
+        logger = logging.getLogger(__name__)
     
     # Setup Dataloader:
     dataset = CustomDataset(
@@ -165,7 +165,7 @@ def main(config):
         pin_memory=True,
         drop_last=True,
     )
-
+    
     # Create model:
     # Note that parameter initialization is done within the model constructor
     model_class = load_model(config['model']['module'], config['model']['class'])
@@ -178,7 +178,6 @@ def main(config):
         use_ckpt_wrapper=config['model']['use_ckpt_wrapper'],
     ).to(device)
     
-    # Model summary:
     if accelerator.is_main_process:
         logger.info(f"Model summary:\n{model}")
     
@@ -209,22 +208,38 @@ def main(config):
         )
     )
     
+    # Resume training if specified:
+    start_epoch = 0
+    train_steps = 0
+    if config['train'].get('resume', False):
+        resume_ckpt_path = config['train'].get('resume_ckpt', None)
+        if resume_ckpt_path is not None and os.path.exists(resume_ckpt_path):
+            ckpt = torch.load(resume_ckpt_path, map_location=device)
+            model.load_state_dict(ckpt["model"])
+            opt.load_state_dict(ckpt["opt"])
+            scheduler.load_state_dict(ckpt.get("scheduler", {}))
+            start_epoch = ckpt.get("epoch", 0)
+            train_steps = ckpt.get("global_step", 0)
+            if accelerator.is_main_process:
+                logger.info(f"Resumed training from checkpoint {resume_ckpt_path} at epoch {start_epoch}, step {train_steps}.")
+        else:
+            if accelerator.is_main_process:
+                logger.info("Resume flag set but no valid checkpoint found. Starting from scratch.")
+    
     # Prepare models for training:
     model.train()
     model, opt, loader = accelerator.prepare(model, opt, loader)
     
     # Variables for monitoring/logging:
-    train_steps = 0
     log_steps = 0
     running_loss = 0
     start_time = time()
     num_epochs = config['train']['epochs']
     
     if accelerator.is_main_process:
-        logger.info(f"Training for {num_epochs} epochs...")
-    for epoch in range(num_epochs):
+        logger.info(f"Training for {num_epochs} epochs, starting at epoch {start_epoch}...")
+    for epoch in range(start_epoch, num_epochs):
         # Update the sampler's epoch so that a new subset of data will be sampled.
-        # This ensures __iter__ in the sampler uses a different seed every epoch.
         if hasattr(loader.sampler, "set_epoch"):
             loader.sampler.set_epoch(epoch)
         if accelerator.is_main_process:
@@ -242,21 +257,17 @@ def main(config):
             opt.step()
             scheduler.step()
             
-            # Log loss values:
             running_loss += loss.item()
             log_steps += 1
             train_steps += 1
             if train_steps % config['train']['log_every'] == 0:
-                # Measure training speed:
                 torch.cuda.synchronize()
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
                 avg_loss = torch.tensor(running_loss / log_steps, device=device)
                 avg_loss = avg_loss.item() / accelerator.num_processes
                 if accelerator.is_main_process:
-                    logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                # Reset monitoring variables:
+                    logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Steps/Sec: {steps_per_sec:.2f}")
                 running_loss = 0
                 log_steps = 0
                 start_time = time()
@@ -265,13 +276,17 @@ def main(config):
             if train_steps % config['train']['ckpt_every'] == 0 and train_steps > 0:
                 if accelerator.is_main_process:
                     checkpoint = {
-                        "model": model.module.state_dict(),
+                        "model": getattr(model, "module", model).state_dict(),
                         "opt": opt.state_dict(),
-                        "config": config
+                        "scheduler": scheduler.state_dict(),
+                        "config": config,
+                        "epoch": epoch,
+                        "global_step": train_steps,
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
+
     if accelerator.is_main_process:
         logger.info("Done!")
 

@@ -172,10 +172,6 @@ def main(config):
         # Mask
         samples[mask0] = 0 
         samples[mask1] = 0
-
-        # Save sampled trajectories
-        np.save(os.path.join(samples_dir, filename), samples)
-        print(f'==> Scenario {filename} sampled and saved !')
         
         #####################################
         # Sampled scenario evaluation loop
@@ -196,7 +192,9 @@ def main(config):
                 valid_agent_gen = agent_gen[(agent_gen[:, 0] != 0) & (agent_gen[:, 1] != 0)]                              
                 # Evaluate each agent's sampled trajectory
                 if (valid_agent_gen.shape[0] > 1) & (valid_agent_future.shape[0] > 1):
-                    metrics.append(evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps, kind))           
+                    s_ade, s_fde, s_mr = evaluate_trajectory(valid_agent_gen, valid_agent_future, num_timesteps, kind)
+                    if s_ade < 5:
+                        metrics.append((s_ade, s_fde, s_mr))        
             if metrics != []:
                 # Unpack metrics and store the agent minimum ADE/FDE and agent average MR
                 ADE, FDE, MR = zip(*metrics)
@@ -209,6 +207,10 @@ def main(config):
             logging.info(f"{idx:05}- {filename}: minADE_{num_sampling}={mean(ADE_scenario):.3f}, minFDE_{num_sampling}={mean(FDE_scenario):.3f}, MR_{num_sampling}={mean(MR_scenario):.3f}")
             metrics_testset.append((mean(ADE_scenario), mean(FDE_scenario), mean(MR_scenario)))
             print(f'===> Scenario ({idx:05}) {filename} evaluated !')
+            # Save best sampled trajectories
+            if mean(ADE_scenario) < 0.8 :
+                np.save(os.path.join(samples_dir, filename), samples)
+                print(f'==> Scenario {filename} sampled and saved !')
         else:
             logging.info(f"This evaluation is conducted for scenario {filename} and all the agent's sampled trajectories are NOT VALID !")
             print(f'===> Scenario ({idx:05}) {filename} discarded !')       
