@@ -61,7 +61,6 @@ class MapEncoderPtsMA(nn.Module):
         init_ = lambda m: init(m, nn.init.xavier_normal_, lambda x: nn.init.constant_(x, 0), np.sqrt(2))
         num_segments = 16
         map_seeds = nn.Parameter(torch.Tensor(1, num_segments, 1, hidden_size), requires_grad=True)
-        nn.init.xavier_uniform_(map_seeds)
         self.map_seeds = map_seeds.reshape(-1, 1, hidden_size)  # (S, 1, H)
         nn.init.xavier_uniform_(self.map_seeds)
         self.road_pts_lin = nn.Sequential(init_(nn.Linear(map_attr, hidden_size)))
