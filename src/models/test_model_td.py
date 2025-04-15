@@ -1,8 +1,8 @@
 import torch
 import time
 from calflops import calculate_flops
-from diffusion import create_diffusion
-from models.backbones.model_td import TrafficDiffuser_models
+from src.diffusion import create_diffusion
+from src.models.backbones.model_td import TrafficDiffuser_models
 
 
 

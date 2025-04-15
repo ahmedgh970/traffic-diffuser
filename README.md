@@ -21,32 +21,19 @@ TrafficDiffuser is a PyTorch-based implementation of a conditional trajectory ge
 ## Folder Structure
 ``` 
 traffic-diffuser-main/
-├── configs/                           # Configuration files for training/sampling
-│     ├── config_sample.yaml           # Sampling-specific configurations
-│     └── config_train.yaml            # Training-specific configurations
-├── diffusion/                         # Core diffusion modules
-├── docs/                              # Documentation
-│     ├── assets/                      # Documentation assets
-│     └── README.md                    # Documentation overview and usage guide
-├── models/                            # Model and architecture components
-│     ├── backbones/                   # Backbone networks for traffic diffuser
-│     │   ├── model_td.py              # TrafficDiffuser backbone model
-│     │   └── layers.py                # Custom layers and utility functions
-│     ├── test_model_td.py             # Test model_td backbone efficiency
-│     └── test_map_encoder.py          # Test map encoder efficiency
+├── assets/                            # Assets
+├── configs/                           # Config files
+├── docs/                              # Doc files
 ├── scripts/                           # Scripts for running tasks
 │     ├── sample.py                    # Sampling script
 │     ├── train.py                     # Training script
-|     ├── process_tracks.py            # Scenario processing script
-|     ├── process_maps.py              # Map processing script
-|     └── process_closest_maps.py      # Closest map processing script
-├── utils/                             # Utility functions and helper scripts
-│     ├── interpolate.py               # Helper function for traj interpolation
-│     ├── metrics.py                   # Evaluation metrics functions
-│     └── __init__.py                  # Makes utils a package
-├── main.py                            # Main file to run train and sample
-├── requirements.txt                   # Project dependencies
-└── README.md                          # Project overview, setup, and usage instructions
+|     └── ...                          # Data preprocessing scripts
+├── src/
+|     ├── diffusion/                   # Core diffusion modules
+|     ├── models/                      # Model and architecture components
+|     └── utils/                       # Utility functions and helper scripts
+├── README.md                          # Project overview, setup, and usage instructions
+└── setup.py                           # Package installation
 ```
 
 ## Setup
@@ -58,13 +45,13 @@ git clone https://github.com/gen-TII/traffic-diffuser.git
 cd traffic-diffuser
 ```
 
-Then, create a python 3.10 conda env and install the requirements
+Then, create a conda env and install the requirements
 
 ```bash
 # Install TrafficDiffuser
-conda create --name venv python=3.10
+conda create --name venv
 conda activate venv
-pip install -r requirements.txt
+pip install -e .
 
 # Install MetaDrive Simulator
 git clone https://github.com/metadriverse/metadrive.git
@@ -101,16 +88,16 @@ To sample trajectories from a pretrained TrafficDiffuser model, run:
 python -m scripts.sample --config configs/config_sample.yaml
 ```
 
-The sampling results are automatically saved in the model's designated results directory, organized within the samples subfolder for easy access. Additionally, evaluation metrics such as ADE (Average Displacement Error), FDE (Final Displacement Error), and TDD (Traveled Distance Difference). The evaluation log file alse include the model summary, number of parameters, FLOPs, and inference runtime.
+The sampling results are automatically saved in the model's designated experiments directory, organized within the samples subfolder for easy access. Additionally, evaluation metrics such as ADE (Average Displacement Error), FDE (Final Displacement Error), and MR (Miss Rate). The evaluation log file alse include the model summary, number of parameters, FLOPs, and inference runtime.
 
 An example of the evaluation log file results:
 ```bash
 ...
 The average evaluation results across test scenarios with :
-- Average minADE_50=1.654
-- Average minFDE_50=3.416
-- Average minTDD_50=1.476
+- Average minADE_6=...
+- Average minFDE_6=...
+- Average MR=...
 ```
 
 #### Visualization of test scenarios 4, 7 and 18:
-![TrafficDiffuser-L sampling results](docs/assets/Visualizations.png)
+![TrafficDiffuser-H sampling results](assets/Visualizations.png)

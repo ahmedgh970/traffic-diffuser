@@ -4,7 +4,7 @@ data:
   size: 3000
   
 train:
-  results_dir: "results"
+  results_dir: "experiments"
   epochs: 4000
   warmup_steps: 10000
   diffusion_steps: 1000
@@ -18,7 +18,7 @@ train:
   seed: 0
 
 model:
-  module: "models.backbones.model_td"
+  module: "src.models.backbones.model_td"
   class: "TrafficDiffuser_models"
   name: "TrafficDiffuser-H"
   num_agents: 10

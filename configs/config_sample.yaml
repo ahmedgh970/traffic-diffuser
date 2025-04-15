@@ -14,8 +14,8 @@ sample:
   seed: 0
 
 model:
-  ckpt: "/path/to/results/000-TrafficDiffuser-H/checkpoints/xxx.pt"
-  module: "models.backbones.model_td"
+  ckpt: "/path/to/experiments/000-TrafficDiffuser-H/checkpoints/xxx.pt"
+  module: "src.models.backbones.model_td"
   class: "TrafficDiffuser_models"
   name: "TrafficDiffuser-H"
   num_agents: 10

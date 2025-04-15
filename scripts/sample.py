@@ -11,8 +11,8 @@ import logging
 from datetime import datetime
 import importlib
 from fvcore.nn import FlopCountAnalysis
-from diffusion import create_diffusion
-from utils import ade, fde, interpolate 
+from src.diffusion import create_diffusion
+from src.utils import ade, fde, interpolate 
 
 
 

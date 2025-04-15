@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
-from models.backbones.layers import modulate, AdaTransformerEnc, AdaTransformerDec, MapTransformerEnc, init, get_1d_sincos_pos_embed
+from src.models.backbones.layers import modulate, AdaTransformerEnc, AdaTransformerDec, MapTransformerEnc, init, get_1d_sincos_pos_embed
 
 
 
