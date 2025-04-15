@@ -1,7 +1,7 @@
 ## The official PyTorch implementation of TrafficDiffuser <br><sub>Denoising Diffusion Model for Traffic Simulation</sub>
 This project features a traffic simulation model for conditional trajectory generation using diffusion models. The model is capable of conditioning on agent histories and environmental maps, generating plausible trajectories for multiple agents with variable sequence length.
 
-![TrafficDiffuser overall architecture](docs/assets/TrafficDiffuser.png)
+![TrafficDiffuser overall architecture](assets/TrafficDiffuser.png)
 
 The repository is organized as follows:
   * [Documentation](#documentation)
